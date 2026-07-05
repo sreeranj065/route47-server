@@ -1,0 +1,23 @@
+{
+  "name": "route47-demo-server",
+  "version": "0.1.0-demo",
+  "description": "Route47 reference demo server for dev/QA — not production customer infrastructure",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node --import tsx src/index.ts",
+    "seed": "node --import tsx src/seed.ts",
+    "build": "tsc",
+    "start:dist": "node dist/index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "hono": "^4.7.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

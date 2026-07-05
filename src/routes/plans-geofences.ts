@@ -1,0 +1,400 @@
+import crypto from "node:crypto";
+import { DEMO_SERVER } from "../config.js";
+import { companyRoutes } from "./auth.js";
+import { db, geofenceToJson, getCompany, routePlanToJson, type GeofenceRow, type RoutePlanRow } from "../db.js";
+
+function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
+  const auth = c.req.header("Authorization");
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
+}
+
+function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
+  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
+  const provided = readAdminKey(c);
+  return !!provided && provided === expected;
+}
+
+companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
+  const companyId = c.req.param("companyId");
+  const driverId = c.req.query("driverId")?.trim();
+
+  const rows = db
+    .prepare(
+      `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+       FROM route_plans
+       WHERE company_id = ?
+       ${driverId ? "AND (driver_id = ? OR driver_id = '')" : ""}
+       ORDER BY published_at DESC`
+    )
+    .all(...(driverId ? [companyId, driverId] : [companyId])) as RoutePlanRow[];
+
+  const adminRoutePlans = rows.map(routePlanToJson);
+
+  return c.json({
+    message: `${adminRoutePlans.length} admin route plan(s).`,
+    adminRoutePlans,
+  });
+});
+
+companyRoutes.post("/route47/companies/:companyId/admin-route-plans", async (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const company = getCompany(companyId);
+  if (!company) {
+    return c.json({ message: "Company not found." }, 404);
+  }
+
+  const body = await c.req.json<{
+    adminRoutePlans?: unknown[];
+    routePlans?: unknown[];
+    routeRunId?: string;
+    routeDateIso?: string;
+    driverId?: string;
+    vehicleId?: string;
+    status?: string;
+    stops?: unknown[];
+  }>();
+
+  const plans = body.adminRoutePlans ?? body.routePlans ?? (body.routeRunId ? [body] : []);
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return c.json({ message: "Provide adminRoutePlans array or a single route plan." }, 400);
+  }
+
+  const now = Date.now();
+  const upsert = db.prepare(
+    `INSERT INTO route_plans (
+      route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(company_id, route_run_id) DO UPDATE SET
+      driver_id = excluded.driver_id,
+      vehicle_id = excluded.vehicle_id,
+      route_date_iso = excluded.route_date_iso,
+      status = excluded.status,
+      stops_json = excluded.stops_json,
+      updated_at = excluded.updated_at`
+  );
+
+  const published: string[] = [];
+
+  for (const raw of plans) {
+    const plan = raw as Record<string, unknown>;
+    const routeRunId = String(plan.routeRunId ?? plan.route_run_id ?? "").trim();
+    if (!routeRunId) continue;
+
+    upsert.run(
+      routeRunId,
+      companyId,
+      String(plan.driverId ?? plan.driver_id ?? ""),
+      String(plan.vehicleId ?? plan.vehicle_id ?? ""),
+      String(plan.routeDateIso ?? plan.route_date_iso ?? new Date().toISOString().slice(0, 10)),
+      String(plan.status ?? "published"),
+      JSON.stringify(plan.stops ?? []),
+      now,
+      now
+    );
+    published.push(routeRunId);
+  }
+
+  return c.json({
+    message: `Published ${published.length} route plan(s).`,
+    publishedRouteRunIds: published,
+  });
+});
+
+companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
+  const companyId = c.req.param("companyId");
+  const company = getCompany(companyId);
+
+  const routePlans = (
+    db
+      .prepare(
+        `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+         FROM route_plans WHERE company_id = ? ORDER BY published_at DESC`
+      )
+      .all(companyId) as RoutePlanRow[]
+  ).map(routePlanToJson);
+
+  const geofences = (
+    db
+      .prepare(
+        `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
+         FROM geofences
+         WHERE company_id = ? AND approval_status = 'approved'
+         ORDER BY updated_at DESC`
+      )
+      .all(companyId) as GeofenceRow[]
+  ).map((row) => {
+    const json = geofenceToJson(row);
+    return {
+      id: json.id,
+      name: json.name,
+      latitude: json.latitude,
+      longitude: json.longitude,
+      radiusMeters: json.radiusMeters,
+    };
+  });
+
+  return c.json({
+    message: "Admin snapshot ready.",
+    snapshot: {
+      companyId,
+      companyName: company?.name ?? companyId,
+      serverTimeMillis: Date.now(),
+      adminRoutePlans: routePlans,
+      geofences,
+    },
+  });
+});
+
+companyRoutes.get("/route47/companies/:companyId/admin/geofences", (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const status = c.req.query("approvalStatus")?.trim();
+
+  const rows = db
+    .prepare(
+      `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
+       FROM geofences
+       WHERE company_id = ?
+       ${status ? "AND approval_status = ?" : ""}
+       ORDER BY updated_at DESC`
+    )
+    .all(...(status ? [companyId, status] : [companyId])) as GeofenceRow[];
+
+  return c.json({
+    message: `${rows.length} geofence(s).`,
+    geofences: rows.map(geofenceToJson),
+  });
+});
+
+companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const body = await c.req.json<{
+    id?: string;
+    name?: string;
+    latitude?: number;
+    longitude?: number;
+    radiusMeters?: number;
+    approvalStatus?: string;
+  }>();
+
+  const id = body.id?.trim() || `gf-${crypto.randomBytes(4).toString("hex")}`;
+  const now = Date.now();
+
+  db.prepare(
+    `INSERT INTO geofences (
+      id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, '', ?, ?)
+    ON CONFLICT(company_id, id) DO UPDATE SET
+      name = excluded.name,
+      latitude = excluded.latitude,
+      longitude = excluded.longitude,
+      radius_meters = excluded.radius_meters,
+      approval_status = excluded.approval_status,
+      updated_at = excluded.updated_at`
+  ).run(
+    id,
+    companyId,
+    body.name ?? "Admin geofence",
+    body.latitude ?? 0,
+    body.longitude ?? 0,
+    body.radiusMeters ?? 120,
+    body.approvalStatus ?? "approved",
+    now,
+    now
+  );
+
+  return c.json({ message: "Geofence saved.", id });
+});
+
+companyRoutes.patch("/route47/companies/:companyId/admin/geofences/:geofenceId", async (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const geofenceId = c.req.param("geofenceId");
+  const body = await c.req.json<{
+    name?: string;
+    approvalStatus?: string;
+    latitude?: number;
+    longitude?: number;
+    radiusMeters?: number;
+  }>();
+
+  const existing = db
+    .prepare(`SELECT id FROM geofences WHERE company_id = ? AND id = ?`)
+    .get(companyId, geofenceId);
+
+  if (!existing) {
+    return c.json({ message: "Geofence not found." }, 404);
+  }
+
+  const row = db
+    .prepare(
+      `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
+       FROM geofences WHERE company_id = ? AND id = ?`
+    )
+    .get(companyId, geofenceId) as GeofenceRow;
+
+  const now = Date.now();
+
+  db.prepare(
+    `UPDATE geofences SET
+      name = ?,
+      latitude = ?,
+      longitude = ?,
+      radius_meters = ?,
+      approval_status = ?,
+      updated_at = ?
+     WHERE company_id = ? AND id = ?`
+  ).run(
+    body.name ?? row.name,
+    body.latitude ?? row.latitude,
+    body.longitude ?? row.longitude,
+    body.radiusMeters ?? row.radius_meters,
+    body.approvalStatus ?? row.approval_status,
+    now,
+    companyId,
+    geofenceId
+  );
+
+  return c.json({
+    message: `Geofence ${body.approvalStatus ? `${body.approvalStatus}.` : "updated."}`,
+    id: geofenceId,
+    approvalStatus: body.approvalStatus ?? row.approval_status,
+  });
+});
+
+companyRoutes.delete("/route47/companies/:companyId/admin/geofences/:geofenceId", (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const geofenceId = c.req.param("geofenceId");
+
+  const result = db
+    .prepare(`DELETE FROM geofences WHERE company_id = ? AND id = ?`)
+    .run(companyId, geofenceId);
+
+  if (result.changes === 0) {
+    return c.json({ message: "Geofence not found." }, 404);
+  }
+
+  return c.json({ message: "Geofence deleted.", id: geofenceId });
+});
+
+companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => {
+  const companyId = c.get("companyId");
+  const body = await c.req.json<{
+    companyId?: string;
+    driverDeviceId?: string;
+    vehicleId?: string;
+    syncedAtMillis?: number;
+    geofences?: Array<{
+      id?: string;
+      name?: string;
+      latitude?: number;
+      longitude?: number;
+      radiusMeters?: number;
+    }>;
+  }>();
+
+  const driverDeviceId = body.driverDeviceId ?? c.get("driverDeviceId");
+  const incoming = body.geofences ?? [];
+  const now = body.syncedAtMillis ?? Date.now();
+
+  const upsert = db.prepare(
+    `INSERT INTO geofences (
+      id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'driver', 'pending', ?, ?, ?)
+    ON CONFLICT(company_id, id) DO UPDATE SET
+      name = excluded.name,
+      latitude = excluded.latitude,
+      longitude = excluded.longitude,
+      radius_meters = excluded.radius_meters,
+      driver_device_id = excluded.driver_device_id,
+      updated_at = excluded.updated_at`
+  );
+
+  for (const geofence of incoming) {
+    const id = geofence.id?.trim() || `gf-${crypto.randomBytes(4).toString("hex")}`;
+    upsert.run(
+      id,
+      companyId,
+      geofence.name ?? "Driver geofence",
+      geofence.latitude ?? 0,
+      geofence.longitude ?? 0,
+      geofence.radiusMeters ?? 120,
+      driverDeviceId,
+      now,
+      now
+    );
+  }
+
+  return c.json({
+    message: `${incoming.length} geofence(s) synced for admin approval.`,
+  });
+});
+
+companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", async (c) => {
+  const companyId = c.get("companyId");
+  const body = await c.req.json<{
+    routeRunId?: string;
+    routeDateIso?: string;
+    driverId?: string;
+    vehicleId?: string;
+    status?: string;
+    stops?: unknown[];
+  }>();
+
+  const routeRunId = String(body.routeRunId ?? "").trim();
+  if (!routeRunId) {
+    return c.json({ message: "routeRunId is required." }, 400);
+  }
+
+  const driverId = String(body.driverId ?? c.get("driverId") ?? "").trim();
+  const vehicleId = String(body.vehicleId ?? c.get("vehicleId") ?? "").trim();
+  const now = Date.now();
+
+  db.prepare(
+    `INSERT INTO route_plans (
+      route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(company_id, route_run_id) DO UPDATE SET
+      driver_id = excluded.driver_id,
+      vehicle_id = excluded.vehicle_id,
+      route_date_iso = excluded.route_date_iso,
+      status = excluded.status,
+      stops_json = excluded.stops_json,
+      updated_at = excluded.updated_at`
+  ).run(
+    routeRunId,
+    companyId,
+    driverId,
+    vehicleId,
+    String(body.routeDateIso ?? new Date().toISOString().slice(0, 10)),
+    String(body.status ?? "in_progress"),
+    JSON.stringify(body.stops ?? []),
+    now,
+    now
+  );
+
+  return c.json({
+    message: "Driver route plan synced.",
+    routeRunId,
+    stopCount: Array.isArray(body.stops) ? body.stops.length : 0,
+  });
+});

@@ -1,0 +1,17 @@
+# Render Blueprint — one-click deploy via https://render.com/deploy?repo=<this repo>
+# One web service, one persistent disk holding the SQLite DB + proof photos.
+services:
+  - type: web
+    name: route47-server
+    runtime: docker
+    plan: starter # persistent disks require a paid instance (~$7/mo)
+    healthCheckPath: /healthz
+    disk:
+      name: route47-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: ROUTE47_ADMIN_API_KEY
+        generateValue: true # random admin key per deploy; view it in the Render dashboard

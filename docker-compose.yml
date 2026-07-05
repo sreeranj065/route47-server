@@ -1,0 +1,19 @@
+# VPS / self-hosted deployment. Put HTTPS in front (e.g. Caddy with automatic
+# TLS) — the Route47 driver app refuses plain-HTTP servers.
+services:
+  route47-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4700:4700"
+    environment:
+      DATA_DIR: /data
+      # Change this! Admin requests authenticate with X-Route47-Admin-Key.
+      ROUTE47_ADMIN_API_KEY: change-me-to-a-long-random-string
+      # Public HTTPS URL drivers should connect to (your Caddy/reverse-proxy domain).
+      ROUTE47_PUBLIC_URL: https://route47.your-domain.example
+    volumes:
+      - route47-data:/data
+
+volumes:
+  route47-data:
