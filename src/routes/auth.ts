@@ -235,6 +235,14 @@ companyRoutes.use("/route47/companies/:companyId/*", async (c, next) => {
     return c.json({ message: "Token does not match company." }, 403);
   }
 
+  const driverStillActive = db
+    .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
+    .get(session.companyId, session.driverId);
+
+  if (!driverStillActive) {
+    return c.json({ message: "Driver profile was removed by your dispatcher." }, 401);
+  }
+
   c.set("companyId", companyId);
   c.set("driverId", session.driverId);
   c.set("driverDeviceId", session.driverDeviceId);
