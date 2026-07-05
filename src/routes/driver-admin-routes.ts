@@ -12,6 +12,14 @@ type DriverRow = {
   vehicleId: string;
 };
 
+type DriverPatchBody = {
+  name?: string;
+  phone?: string;
+  vehicleId?: string;
+  username?: string;
+  password?: string;
+};
+
 function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
   const auth = c.req.header("Authorization");
   const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
@@ -223,15 +231,9 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const companyId = c.req.param("companyId");
     const driverId = c.req.param("driverId");
-    const body = await c.req
-      .json<{
-        name?: string;
-        phone?: string;
-        vehicleId?: string;
-        username?: string;
-        password?: string;
-      }>()
-      .catch(() => ({}));
+    const body: DriverPatchBody = await c.req
+      .json<DriverPatchBody>()
+      .catch((): DriverPatchBody => ({}));
 
     const row = db
       .prepare(
