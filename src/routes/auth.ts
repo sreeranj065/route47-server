@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { bearerToken, buildConnectionResponse, createDeviceToken, newDriverDeviceId, resolveDeviceToken, verifyPassword } from "../auth.js";
 import { DEMO_SERVER, demoHealthPayload } from "../config.js";
 import { db, getCompany } from "../db.js";
+import { registerDriverAdminRoutes } from "./driver-admin-routes.js";
 
 type AuthEnv = {
   Variables: {
@@ -324,3 +325,5 @@ companyRoutes.post("/route47/companies/:companyId/admin/invites", async (c) => {
     expiresAtMillis: expiresAt,
   });
 });
+
+registerDriverAdminRoutes(companyRoutes);

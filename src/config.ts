@@ -49,6 +49,7 @@ export function demoHealthPayload(extra: Record<string, unknown> = {}) {
     version: SERVER_VERSION,
     purpose: DEMO_SERVER.purpose,
     serverTimeMillis: Date.now(),
+    adminFeatures: ["drivers-roster", "drivers-create", "activity-sync"],
     ...extra,
   };
 }
