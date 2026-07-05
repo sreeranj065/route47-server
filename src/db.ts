@@ -138,6 +138,23 @@ db.exec(`
     ON heartbeats(company_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_geofences_company_status
     ON geofences(company_id, approval_status);
+
+  CREATE TABLE IF NOT EXISTS activity_events (
+    event_id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    driver_id TEXT NOT NULL,
+    route_id TEXT NOT NULL DEFAULT '',
+    stop_id TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL DEFAULT '',
+    timestamp_millis INTEGER NOT NULL,
+    latitude REAL,
+    longitude REAL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_activity_events_company_driver_time
+    ON activity_events(company_id, driver_id, timestamp_millis DESC);
 `);
 
 export type GeofenceRow = {

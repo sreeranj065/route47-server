@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import { DEMO_SERVER } from "../config.js";
+import { hashPassword } from "../auth.js";
 import { companyRoutes } from "./auth.js";
 import { db, routePlanToJson, type RoutePlanRow } from "../db.js";
 
@@ -116,6 +118,144 @@ function normalizeProgressEventType(eventType: string, stopStatus: string): stri
   if (stopStatus === "Arrived") return "STOP_ARRIVED";
   return "ROUTE_PROGRESS";
 }
+
+companyRoutes.post("/route47/companies/:companyId/drivers", async (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const body = await c.req.json<{
+    id?: string;
+    name?: string;
+    phone?: string;
+    vehicleId?: string;
+    username?: string;
+    password?: string;
+  }>();
+
+  const company = db.prepare(`SELECT id FROM companies WHERE id = ?`).get(companyId);
+  if (!company) {
+    return c.json({ message: "Company not found." }, 404);
+  }
+
+  const displayName = body.name?.trim() || "New Driver";
+  const vehicleId = body.vehicleId?.trim() ?? "";
+  const requestedId = body.id?.trim() ?? "";
+  const driverId =
+    requestedId ||
+    `drv-${crypto.randomBytes(4).toString("hex")}`;
+
+  const existing = db
+    .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
+    .get(companyId, driverId);
+  if (existing) {
+    return c.json({ message: "Driver ID already exists." }, 409);
+  }
+
+  const usernameBase = (body.username?.trim() || displayName.toLowerCase().replace(/[^a-z0-9]+/g, "."))
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 24) || "driver";
+  let username = usernameBase;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const taken = db
+      .prepare(`SELECT id FROM drivers WHERE company_id = ? AND username = ?`)
+      .get(companyId, username);
+    if (!taken) break;
+    username = `${usernameBase}${attempt + 1}`.slice(0, 32);
+  }
+
+  const password = body.password?.trim() || crypto.randomBytes(6).toString("hex");
+  const now = Date.now();
+
+  db.prepare(
+    `INSERT INTO drivers (id, company_id, username, password_hash, display_name, vehicle_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(driverId, companyId, username, hashPassword(password), displayName, vehicleId, now);
+
+  const row = db
+    .prepare(
+      `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+       FROM drivers WHERE company_id = ? AND id = ?`,
+    )
+    .get(companyId, driverId) as DriverRow;
+
+  return c.json({
+    ...mapDriverRecord(companyId, row, 0),
+    username,
+    phone: body.phone?.trim() ?? "",
+    temporaryPassword: password,
+    message: "Driver created.",
+  });
+});
+
+companyRoutes.post("/route47/companies/:companyId/activity/sync", async (c) => {
+  const companyId = c.req.param("companyId");
+  const sessionDriverId = c.get("driverId")?.trim() ?? "";
+
+  const body = await c.req.json<{
+    events?: Array<{
+      eventId?: string;
+      driverId?: string;
+      companyId?: string;
+      routeId?: string;
+      stopId?: string;
+      eventType?: string;
+      timestampMillis?: number;
+      latitude?: number;
+      longitude?: number;
+      metadata?: Record<string, string>;
+    }>;
+  }>();
+
+  const events = body.events ?? [];
+  if (events.length === 0) {
+    return c.json({ message: "No activity events to sync." });
+  }
+
+  const insert = db.prepare(
+    `INSERT OR REPLACE INTO activity_events (
+      event_id, company_id, driver_id, route_id, stop_id, event_type,
+      timestamp_millis, latitude, longitude, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  const now = Date.now();
+  let synced = 0;
+
+  for (const event of events) {
+    const eventId = event.eventId?.trim();
+    if (!eventId) continue;
+
+    const driverId = event.driverId?.trim() || sessionDriverId;
+    if (!driverId) continue;
+
+    const driver = db
+      .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
+      .get(companyId, driverId);
+    if (!driver) continue;
+
+    insert.run(
+      eventId,
+      companyId,
+      driverId,
+      event.routeId?.trim() ?? "",
+      event.stopId?.trim() ?? "",
+      event.eventType?.trim() ?? "UNKNOWN",
+      Number(event.timestampMillis) || now,
+      typeof event.latitude === "number" ? event.latitude : null,
+      typeof event.longitude === "number" ? event.longitude : null,
+      JSON.stringify(event.metadata ?? {}),
+      now,
+    );
+    synced += 1;
+  }
+
+  return c.json({
+    message: `${synced} activity event(s) synced.`,
+    syncedCount: synced,
+  });
+});
 
 companyRoutes.get("/route47/companies/:companyId/drivers", (c) => {
   if (!requireAdmin(c)) {
@@ -286,6 +426,54 @@ companyRoutes.get("/route47/companies/:companyId/drivers/:driverId/activity", (c
       ],
     ) as Array<Record<string, unknown>>;
 
+  const activityRows = db
+    .prepare(
+      `SELECT event_id AS eventId, driver_id AS driverId, route_id AS routeId, stop_id AS stopId,
+              event_type AS eventType, timestamp_millis AS timestampMillis,
+              latitude, longitude, metadata_json AS metadataJson
+       FROM activity_events
+       WHERE company_id = ? AND driver_id = ?
+       ${routeId ? "AND route_id = ?" : ""}
+       ${stopId ? "AND stop_id = ?" : ""}
+       ${fromMillis ? "AND timestamp_millis >= ?" : ""}
+       ${toMillis ? "AND timestamp_millis <= ?" : ""}
+       ORDER BY timestamp_millis DESC
+       LIMIT ?`,
+    )
+    .all(
+      ...[
+        companyId,
+        driverId,
+        ...(routeId ? [routeId] : []),
+        ...(stopId ? [stopId] : []),
+        ...(fromMillis ? [fromMillis] : []),
+        ...(toMillis ? [toMillis] : []),
+        limit,
+      ],
+    ) as Array<Record<string, unknown>>;
+
+  const syncedEvents = activityRows.map((row) => {
+    let metadata: Record<string, string> = {};
+    try {
+      metadata = JSON.parse(String(row.metadataJson ?? "{}")) as Record<string, string>;
+    } catch {
+      metadata = {};
+    }
+
+    return {
+      eventId: String(row.eventId ?? ""),
+      driverId,
+      companyId,
+      routeId: row.routeId,
+      stopId: row.stopId,
+      eventType: String(row.eventType ?? ""),
+      timestampMillis: row.timestampMillis,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      metadata,
+    };
+  });
+
   const progressEvents = progressRows.map((row) => {
     const eventTypeValue = normalizeProgressEventType(
       String(row.eventType ?? ""),
@@ -323,7 +511,7 @@ companyRoutes.get("/route47/companies/:companyId/drivers/:driverId/activity", (c
     },
   }));
 
-  let events = [...progressEvents, ...proofEvents].sort(
+  let events = [...syncedEvents, ...progressEvents, ...proofEvents].sort(
     (a, b) => Number(b.timestampMillis) - Number(a.timestampMillis),
   );
 
