@@ -216,6 +216,86 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     return c.json(mapDriverRecord(companyId, row, 0));
   });
 
+  companyRoutes.patch("/route47/companies/:companyId/drivers/:driverId", async (c) => {
+    if (!requireAdmin(c)) {
+      return c.json({ message: "Admin API key required." }, 401);
+    }
+
+    const companyId = c.req.param("companyId");
+    const driverId = c.req.param("driverId");
+    const body = await c.req
+      .json<{
+        name?: string;
+        phone?: string;
+        vehicleId?: string;
+        username?: string;
+        password?: string;
+      }>()
+      .catch(() => ({}));
+
+    const row = db
+      .prepare(
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+         FROM drivers
+         WHERE company_id = ? AND id = ?`,
+      )
+      .get(companyId, driverId) as DriverRow | undefined;
+
+    if (!row) {
+      return c.json({ message: "Driver not found." }, 404);
+    }
+
+    const displayName = body.name?.trim() || row.displayName || "Driver";
+    const vehicleId =
+      body.vehicleId !== undefined ? body.vehicleId.trim() : row.vehicleId || "";
+
+    let username = row.username;
+    if (body.username?.trim()) {
+      const requested = body.username.trim();
+      const taken = db
+        .prepare(
+          `SELECT id FROM drivers WHERE company_id = ? AND username = ? AND id != ?`,
+        )
+        .get(companyId, requested, driverId);
+      if (taken) {
+        return c.json({ message: "Username already in use." }, 409);
+      }
+      username = requested;
+    }
+
+    const passwordHash = body.password?.trim()
+      ? hashPassword(body.password.trim())
+      : null;
+
+    if (passwordHash) {
+      db.prepare(
+        `UPDATE drivers
+         SET display_name = ?, vehicle_id = ?, username = ?, password_hash = ?
+         WHERE company_id = ? AND id = ?`,
+      ).run(displayName, vehicleId, username, passwordHash, companyId, driverId);
+    } else {
+      db.prepare(
+        `UPDATE drivers
+         SET display_name = ?, vehicle_id = ?, username = ?
+         WHERE company_id = ? AND id = ?`,
+      ).run(displayName, vehicleId, username, companyId, driverId);
+    }
+
+    const updated = db
+      .prepare(
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+         FROM drivers
+         WHERE company_id = ? AND id = ?`,
+      )
+      .get(companyId, driverId) as DriverRow;
+
+    return c.json({
+      ...mapDriverRecord(companyId, updated, 0),
+      phone: body.phone?.trim() ?? "",
+      message: "Driver updated.",
+    });
+  });
+
   companyRoutes.patch("/route47/companies/:companyId/drivers/:driverId/status", async (c) => {
     if (!requireAdmin(c)) {
       return c.json({ message: "Admin API key required." }, 401);
