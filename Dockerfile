@@ -20,10 +20,11 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 # Persistent state (SQLite DB + proof photos) lives under /data — mount a volume
-# here. The container runs as root because Render/Railway mount persistent disks
+# here (declared in render.yaml / Railway dashboard / docker-compose.yml, NOT via
+# a VOLUME instruction: Railway rejects Dockerfiles containing VOLUME). The
+# container runs as root because Render/Railway mount persistent disks
 # root-owned; a non-root user would hit EACCES on first write.
 RUN mkdir -p /data
-VOLUME ["/data"]
 EXPOSE 4700
 # PORT is injected by Render/Railway; the server falls back to 4700 locally.
 CMD ["node", "dist/index.js"]
