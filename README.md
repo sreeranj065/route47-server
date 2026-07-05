@@ -23,10 +23,12 @@ The [`render.yaml`](./render.yaml) Blueprint creates one Docker web service with
 
 Railway deploys this repo cleanly via [`railway.json`](./railway.json) (Dockerfile build + `/healthz` healthcheck):
 
-1. Sign in at [railway.com](https://railway.com) → **New Project → Deploy from GitHub repo** → select this repo.
+1. Sign in at [railway.com](https://railway.com) → deploy the [published template](https://railway.com/deploy/vast-red) or **New Project → Deploy from GitHub repo** → select this repo.
 2. Add a **Volume** to the service and mount it at `/data` (Railway volumes are created in the dashboard, not in `railway.json`).
-3. Add a `ROUTE47_ADMIN_API_KEY` service variable (long random string).
-4. Under **Settings → Networking**, generate a public domain — that's your server URL, e.g. `https://route47-server-production.up.railway.app`.
+3. Add `ROUTE47_ADMIN_API_KEY` = `${{secret(32)}}` (Railway generates a unique key per deployment).
+4. **Do not set `PORT` manually** — Railway injects it automatically. The server listens on whatever `PORT` Railway provides.
+5. Under **Settings → Networking**, generate a public domain. If you see a **Target port** field, it must match the port in the deploy log line `Listening on http://0.0.0.0:XXXX` (usually the same as Railway's injected `PORT`).
+6. Your server URL is that domain, e.g. `https://route47-server-production.up.railway.app`.
 
 ## Deploy on your own VPS (Hetzner, DigitalOcean, Lightsail…)
 

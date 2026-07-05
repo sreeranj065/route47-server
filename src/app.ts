@@ -5,6 +5,7 @@ import { authRoutes, companyRoutes } from "./routes/auth.js";
 import "./routes/live.js";
 import "./routes/plans-geofences.js";
 import "./routes/proofs.js";
+import "./routes/admin-fleet.js";
 
 export const app = new Hono();
 

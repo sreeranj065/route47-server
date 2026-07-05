@@ -4,8 +4,18 @@ import { DEMO_SERVER, SERVER_VERSION } from "./config.js";
 import { DATA_DIR, DB_PATH } from "./db.js";
 import { seedDemoData } from "./seed.js";
 
-// Render/Railway inject PORT; 4700 is the local dev default.
-const port = Number(process.env.PORT ?? 4700);
+// Render/Railway inject PORT; 4700 is the local dev default only.
+function resolvePort(): number {
+  const raw = process.env.PORT?.trim();
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    console.warn(`Invalid PORT="${raw}", falling back to 4700`);
+  }
+  return 4700;
+}
+
+const port = resolvePort();
 // Bind all interfaces so the server is reachable inside containers.
 const hostname = process.env.HOST ?? "0.0.0.0";
 

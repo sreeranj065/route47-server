@@ -155,5 +155,47 @@ companyRoutes.post("/route47/companies/:companyId/sync/request", async (c) => {
 });
 
 companyRoutes.post("/route47/companies/:companyId/reports/daily", async (c) => {
-  return c.json({ message: "Daily report accepted." });
+  const companyId = c.req.param("companyId");
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const fromMillis = startOfDay.getTime();
+
+  const stopsCompleted = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM route_progress
+         WHERE company_id = ? AND created_at >= ? AND stop_status = 'Completed'`,
+      )
+      .get(companyId, fromMillis) as { count: number }
+  ).count;
+
+  const proofsUploaded = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM proofs WHERE company_id = ? AND created_at >= ?`,
+      )
+      .get(companyId, fromMillis) as { count: number }
+  ).count;
+
+  const activeDrivers = (
+    db
+      .prepare(
+        `SELECT COUNT(DISTINCT driver_id) AS count
+         FROM heartbeats
+         WHERE company_id = ? AND created_at >= ?`,
+      )
+      .get(companyId, fromMillis) as { count: number }
+  ).count;
+
+  return c.json({
+    message: "Daily report ready.",
+    report: {
+      dateIso: startOfDay.toISOString().slice(0, 10),
+      stopsCompleted,
+      proofsUploaded,
+      activeDrivers,
+      serverTimeMillis: Date.now(),
+    },
+  });
 });
