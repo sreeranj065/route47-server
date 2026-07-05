@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import type { Hono } from "hono";
 import { hashPassword } from "../auth.js";
 import { DEMO_SERVER } from "../config.js";
@@ -263,5 +264,92 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     }
 
     return c.json(routePlanToJson(plan));
+  });
+
+  companyRoutes.delete("/route47/companies/:companyId/drivers/:driverId", (c) => {
+    if (!requireAdmin(c)) {
+      return c.json({ message: "Admin API key required." }, 401);
+    }
+
+    const companyId = c.req.param("companyId");
+    const driverId = c.req.param("driverId");
+
+    const driver = db
+      .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
+      .get(companyId, driverId);
+
+    if (!driver) {
+      return c.json({ message: "Driver not found." }, 404);
+    }
+
+    const deviceRows = db
+      .prepare(
+        `SELECT driver_device_id AS driverDeviceId
+         FROM device_tokens
+         WHERE company_id = ? AND driver_id = ?`,
+      )
+      .all(companyId, driverId) as Array<{ driverDeviceId: string }>;
+
+    for (const row of deviceRows) {
+      if (row.driverDeviceId) {
+        db.prepare(
+          `DELETE FROM geofences WHERE company_id = ? AND driver_device_id = ?`,
+        ).run(companyId, row.driverDeviceId);
+      }
+    }
+
+    db.prepare(`DELETE FROM device_tokens WHERE company_id = ? AND driver_id = ?`).run(
+      companyId,
+      driverId,
+    );
+    db.prepare(`DELETE FROM heartbeats WHERE company_id = ? AND driver_id = ?`).run(
+      companyId,
+      driverId,
+    );
+    db.prepare(`DELETE FROM route_progress WHERE company_id = ? AND driver_id = ?`).run(
+      companyId,
+      driverId,
+    );
+    db.prepare(`DELETE FROM route_plans WHERE company_id = ? AND driver_id = ?`).run(
+      companyId,
+      driverId,
+    );
+    db.prepare(`DELETE FROM activity_events WHERE company_id = ? AND driver_id = ?`).run(
+      companyId,
+      driverId,
+    );
+    db.prepare(`DELETE FROM invites WHERE company_id = ? AND driver_id = ?`).run(
+      companyId,
+      driverId,
+    );
+
+    const proofRows = db
+      .prepare(
+        `SELECT proof_id AS proofId, file_path AS filePath
+         FROM proofs
+         WHERE company_id = ? AND driver_id = ?`,
+      )
+      .all(companyId, driverId) as Array<{ proofId: string; filePath: string }>;
+
+    for (const proof of proofRows) {
+      if (proof.filePath) {
+        try {
+          fs.unlinkSync(proof.filePath);
+        } catch {
+          // Best-effort file cleanup.
+        }
+      }
+    }
+
+    db.prepare(`DELETE FROM proofs WHERE company_id = ? AND driver_id = ?`).run(
+      companyId,
+      driverId,
+    );
+    db.prepare(`DELETE FROM drivers WHERE company_id = ? AND id = ?`).run(companyId, driverId);
+
+    return c.json({
+      message: "Driver deleted.",
+      driverId,
+    });
   });
 }
