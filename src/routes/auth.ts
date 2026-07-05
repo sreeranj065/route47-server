@@ -280,13 +280,18 @@ companyRoutes.post("/route47/companies/:companyId/admin/invites", async (c) => {
     driverId?: string;
     vehicleId?: string;
     expiresInDays?: number;
+    expiresInHours?: number;
   }>();
 
   const driverId = body.driverId?.trim() || null;
   const vehicleId = body.vehicleId?.trim() ?? "";
-  const expiresInDays = Math.min(Math.max(body.expiresInDays ?? 14, 1), 90);
+  const expiresInHours = body.expiresInHours != null
+    ? Math.min(Math.max(body.expiresInHours, 1), 90 * 24)
+    : body.expiresInDays != null
+      ? Math.min(Math.max(body.expiresInDays, 1), 90) * 24
+      : 1;
   const now = Date.now();
-  const expiresAt = now + expiresInDays * 24 * 60 * 60 * 1000;
+  const expiresAt = now + expiresInHours * 60 * 60 * 1000;
 
   if (driverId) {
     const driver = db
