@@ -157,6 +157,25 @@ db.exec(`
     ON activity_events(company_id, driver_id, timestamp_millis DESC);
 `);
 
+function ensureGeofenceLinkageColumns() {
+  const columns = db
+    .prepare(`PRAGMA table_info(geofences)`)
+    .all() as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+
+  if (!names.has("stop_id")) {
+    db.exec(`ALTER TABLE geofences ADD COLUMN stop_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!names.has("route_id")) {
+    db.exec(`ALTER TABLE geofences ADD COLUMN route_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!names.has("last_triggered_at_millis")) {
+    db.exec(`ALTER TABLE geofences ADD COLUMN last_triggered_at_millis INTEGER NOT NULL DEFAULT 0`);
+  }
+}
+
+ensureGeofenceLinkageColumns();
+
 export type GeofenceRow = {
   id: string;
   company_id: string;
@@ -167,6 +186,9 @@ export type GeofenceRow = {
   source: string;
   approval_status: string;
   driver_device_id: string;
+  stop_id: string;
+  route_id: string;
+  last_triggered_at_millis: number;
   created_at: number;
   updated_at: number;
 };
@@ -199,6 +221,9 @@ export function geofenceToJson(row: GeofenceRow) {
     source: row.source,
     approvalStatus: row.approval_status,
     driverDeviceId: row.driver_device_id,
+    stopId: row.stop_id || undefined,
+    routeId: row.route_id || undefined,
+    lastTriggeredAtMillis: row.last_triggered_at_millis || undefined,
     createdAtMillis: row.created_at,
     updatedAtMillis: row.updated_at,
   };

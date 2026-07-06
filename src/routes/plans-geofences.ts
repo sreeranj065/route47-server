@@ -3,6 +3,10 @@ import { DEMO_SERVER } from "../config.js";
 import { companyRoutes } from "./auth.js";
 import { db, geofenceToJson, getCompany, routePlanToJson, type GeofenceRow, type RoutePlanRow } from "../db.js";
 
+const GEOFENCE_SELECT = `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
+  driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
+  FROM geofences`;
+
 function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
   const auth = c.req.header("Authorization");
   const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
@@ -121,8 +125,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
   const geofences = (
     db
       .prepare(
-        `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
-         FROM geofences
+        `${GEOFENCE_SELECT}
          WHERE company_id = ? AND approval_status = 'approved'
          ORDER BY updated_at DESC`
       )
@@ -135,6 +138,9 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       latitude: json.latitude,
       longitude: json.longitude,
       radiusMeters: json.radiusMeters,
+      stopId: json.stopId,
+      routeId: json.routeId,
+      lastTriggeredAtMillis: json.lastTriggeredAtMillis,
     };
   });
 
@@ -160,8 +166,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/geofences", (c) => {
 
   const rows = db
     .prepare(
-      `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
-       FROM geofences
+      `${GEOFENCE_SELECT}
        WHERE company_id = ?
        ${status ? "AND approval_status = ?" : ""}
        ORDER BY updated_at DESC`
@@ -187,6 +192,9 @@ companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) =>
     longitude?: number;
     radiusMeters?: number;
     approvalStatus?: string;
+    stopId?: string;
+    routeId?: string;
+    lastTriggeredAtMillis?: number;
   }>();
 
   const id = body.id?.trim() || `gf-${crypto.randomBytes(4).toString("hex")}`;
@@ -194,14 +202,18 @@ companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) =>
 
   db.prepare(
     `INSERT INTO geofences (
-      id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, '', ?, ?)
+      id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
+      driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, '', ?, ?, ?, ?, ?)
     ON CONFLICT(company_id, id) DO UPDATE SET
       name = excluded.name,
       latitude = excluded.latitude,
       longitude = excluded.longitude,
       radius_meters = excluded.radius_meters,
       approval_status = excluded.approval_status,
+      stop_id = excluded.stop_id,
+      route_id = excluded.route_id,
+      last_triggered_at_millis = excluded.last_triggered_at_millis,
       updated_at = excluded.updated_at`
   ).run(
     id,
@@ -211,6 +223,9 @@ companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) =>
     body.longitude ?? 0,
     body.radiusMeters ?? 120,
     body.approvalStatus ?? "approved",
+    body.stopId ?? "",
+    body.routeId ?? "",
+    body.lastTriggeredAtMillis ?? 0,
     now,
     now
   );
@@ -231,6 +246,9 @@ companyRoutes.patch("/route47/companies/:companyId/admin/geofences/:geofenceId",
     latitude?: number;
     longitude?: number;
     radiusMeters?: number;
+    stopId?: string;
+    routeId?: string;
+    lastTriggeredAtMillis?: number;
   }>();
 
   const existing = db
@@ -242,10 +260,7 @@ companyRoutes.patch("/route47/companies/:companyId/admin/geofences/:geofenceId",
   }
 
   const row = db
-    .prepare(
-      `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
-       FROM geofences WHERE company_id = ? AND id = ?`
-    )
+    .prepare(`${GEOFENCE_SELECT} WHERE company_id = ? AND id = ?`)
     .get(companyId, geofenceId) as GeofenceRow;
 
   const now = Date.now();
@@ -257,6 +272,9 @@ companyRoutes.patch("/route47/companies/:companyId/admin/geofences/:geofenceId",
       longitude = ?,
       radius_meters = ?,
       approval_status = ?,
+      stop_id = ?,
+      route_id = ?,
+      last_triggered_at_millis = ?,
       updated_at = ?
      WHERE company_id = ? AND id = ?`
   ).run(
@@ -265,6 +283,9 @@ companyRoutes.patch("/route47/companies/:companyId/admin/geofences/:geofenceId",
     body.longitude ?? row.longitude,
     body.radiusMeters ?? row.radius_meters,
     body.approvalStatus ?? row.approval_status,
+    body.stopId ?? row.stop_id,
+    body.routeId ?? row.route_id,
+    body.lastTriggeredAtMillis ?? row.last_triggered_at_millis,
     now,
     companyId,
     geofenceId
@@ -309,6 +330,9 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
       latitude?: number;
       longitude?: number;
       radiusMeters?: number;
+      stopId?: string;
+      routeId?: string;
+      lastTriggeredAtMillis?: number;
     }>;
   }>();
 
@@ -318,14 +342,21 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
 
   const upsert = db.prepare(
     `INSERT INTO geofences (
-      id, company_id, name, latitude, longitude, radius_meters, source, approval_status, driver_device_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'driver', 'pending', ?, ?, ?)
+      id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
+      driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'driver', 'pending', ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company_id, id) DO UPDATE SET
       name = excluded.name,
       latitude = excluded.latitude,
       longitude = excluded.longitude,
       radius_meters = excluded.radius_meters,
       driver_device_id = excluded.driver_device_id,
+      stop_id = excluded.stop_id,
+      route_id = excluded.route_id,
+      last_triggered_at_millis = CASE
+        WHEN excluded.last_triggered_at_millis > 0 THEN excluded.last_triggered_at_millis
+        ELSE geofences.last_triggered_at_millis
+      END,
       updated_at = excluded.updated_at`
   );
 
@@ -339,6 +370,9 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
       geofence.longitude ?? 0,
       geofence.radiusMeters ?? 120,
       driverDeviceId,
+      geofence.stopId ?? "",
+      geofence.routeId ?? "",
+      geofence.lastTriggeredAtMillis ?? 0,
       now,
       now
     );

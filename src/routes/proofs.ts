@@ -1,7 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DEMO_SERVER } from "../config.js";
 import { companyRoutes } from "./auth.js";
 import { db, PROOFS_DIR } from "../db.js";
+import { buildProofFolderName, buildStoredProofPath } from "../proof-storage.js";
+
+function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
+  const auth = c.req.header("Authorization");
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
+}
+
+function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
+  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
+  const provided = readAdminKey(c);
+  return !!provided && provided === expected;
+}
 
 companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   const companyId = c.get("companyId");
@@ -36,9 +50,14 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     return c.json({ message: "Proof file is required." }, 400);
   }
 
-  const ext = path.extname(file.name) || ".bin";
-  const storedName = `${proofId}${ext}`;
-  const storedPath = path.join(PROOFS_DIR, companyId, storedName);
+  const { storedPath, storedName, relativePath } = buildStoredProofPath({
+    companyId,
+    proofId,
+    proofType,
+    routeRunId,
+    originalFileName: file.name || `${proofId}.bin`,
+  });
+
   fs.mkdirSync(path.dirname(storedPath), { recursive: true });
 
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -50,9 +69,16 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
       proof_type, customer_name, address, file_name, file_path, mime_type, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(proof_id) DO UPDATE SET
+      driver_id = excluded.driver_id,
+      route_run_id = excluded.route_run_id,
+      stop_id = excluded.stop_id,
+      proof_type = excluded.proof_type,
+      customer_name = excluded.customer_name,
+      address = excluded.address,
       file_name = excluded.file_name,
       file_path = excluded.file_path,
-      mime_type = excluded.mime_type`
+      mime_type = excluded.mime_type,
+      created_at = excluded.created_at`
   ).run(
     proofId,
     companyId,
@@ -71,8 +97,10 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   );
 
   return c.json({
-    message: "Proof uploaded to demo server.",
+    message: "Proof uploaded.",
     proofId,
+    storageFolder: buildProofFolderName(proofType),
+    relativePath,
   });
 });
 
@@ -80,6 +108,38 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
   const companyId = c.req.param("companyId");
   const routeRunId = c.req.query("routeRunId")?.trim();
   const stopId = c.req.query("stopId")?.trim();
+  const driverId = c.req.query("driverId")?.trim();
+  const proofType = c.req.query("proofType")?.trim();
+  const fromMillis = Number(c.req.query("fromMillis") ?? "");
+  const toMillis = Number(c.req.query("toMillis") ?? "");
+
+  const conditions = ["company_id = ?"];
+  const params: Array<string | number> = [companyId];
+
+  if (routeRunId) {
+    conditions.push("route_run_id = ?");
+    params.push(routeRunId);
+  }
+  if (stopId) {
+    conditions.push("stop_id = ?");
+    params.push(stopId);
+  }
+  if (driverId) {
+    conditions.push("driver_id = ?");
+    params.push(driverId);
+  }
+  if (proofType) {
+    conditions.push("LOWER(proof_type) LIKE ?");
+    params.push(`%${proofType.toLowerCase()}%`);
+  }
+  if (Number.isFinite(fromMillis) && fromMillis > 0) {
+    conditions.push("created_at >= ?");
+    params.push(fromMillis);
+  }
+  if (Number.isFinite(toMillis) && toMillis > 0) {
+    conditions.push("created_at <= ?");
+    params.push(toMillis);
+  }
 
   const rows = db
     .prepare(
@@ -87,26 +147,58 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
               driver_device_id AS driverDeviceId, vehicle_id AS vehicleId,
               route_run_id AS routeRunId, stop_id AS stopId, proof_type AS proofType,
               customer_name AS customerName, address, file_name AS fileName,
-              mime_type AS mimeType, created_at AS createdAtMillis
+              file_path AS filePath, mime_type AS mimeType, created_at AS createdAtMillis
        FROM proofs
-       WHERE company_id = ?
-       ${routeRunId ? "AND route_run_id = ?" : ""}
-       ${stopId ? "AND stop_id = ?" : ""}
+       WHERE ${conditions.join(" AND ")}
        ORDER BY created_at DESC
        LIMIT 500`
     )
-    .all(
-      ...[
-        companyId,
-        ...(routeRunId ? [routeRunId] : []),
-        ...(stopId ? [stopId] : []),
-      ]
-    ) as Array<Record<string, unknown>>;
+    .all(...params) as Array<Record<string, unknown>>;
+
+  const proofs = rows.map((row) => ({
+    ...row,
+    storageFolder: buildProofFolderName(String(row.proofType ?? "")),
+  }));
 
   return c.json({
-    message: `${rows.length} proof(s).`,
-    proofs: rows,
+    message: `${proofs.length} proof(s).`,
+    proofs,
   });
+});
+
+companyRoutes.delete("/route47/companies/:companyId/proofs/:proofId", (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const proofId = c.req.param("proofId");
+
+  const row = db
+    .prepare(
+      `SELECT file_path AS filePath
+       FROM proofs WHERE company_id = ? AND proof_id = ?`
+    )
+    .get(companyId, proofId) as { filePath: string } | undefined;
+
+  if (!row) {
+    return c.json({ message: "Proof not found." }, 404);
+  }
+
+  if (row.filePath && fs.existsSync(row.filePath)) {
+    try {
+      fs.unlinkSync(row.filePath);
+    } catch {
+      // Best-effort file cleanup.
+    }
+  }
+
+  db.prepare(`DELETE FROM proofs WHERE company_id = ? AND proof_id = ?`).run(
+    companyId,
+    proofId
+  );
+
+  return c.json({ message: "Proof deleted.", proofId });
 });
 
 companyRoutes.get("/route47/companies/:companyId/proofs/:proofId/file", (c) => {
