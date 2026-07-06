@@ -1,5 +1,19 @@
+import crypto from "node:crypto";
+import { DEMO_SERVER } from "../config.js";
 import { companyRoutes } from "./auth.js";
-import { db } from "../db.js";
+import { db, dailyReportToJson, type DailyReportRow } from "../db.js";
+
+function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
+  const auth = c.req.header("Authorization");
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
+}
+
+function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
+  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
+  const provided = readAdminKey(c);
+  return !!provided && provided === expected;
+}
 
 companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) => {
   const companyId = c.get("companyId");
@@ -156,46 +170,141 @@ companyRoutes.post("/route47/companies/:companyId/sync/request", async (c) => {
 
 companyRoutes.post("/route47/companies/:companyId/reports/daily", async (c) => {
   const companyId = c.req.param("companyId");
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-  const fromMillis = startOfDay.getTime();
+  const body = await c.req.json<{
+    routeRunId?: string;
+    routeDateIso?: string;
+    totalStops?: number;
+    completedStops?: number;
+    skippedStops?: number;
+    failedStops?: number;
+    proofCount?: number;
+    receiptCount?: number;
+    totalDistanceMeters?: number;
+    totalDriveTimeSeconds?: number;
+    createdAtMillis?: number;
+    driverId?: string;
+    driverDeviceId?: string;
+    vehicleId?: string;
+  }>();
 
-  const stopsCompleted = (
-    db
-      .prepare(
-        `SELECT COUNT(*) AS count
-         FROM route_progress
-         WHERE company_id = ? AND created_at >= ? AND stop_status = 'Completed'`,
-      )
-      .get(companyId, fromMillis) as { count: number }
-  ).count;
+  const routeRunId = String(body.routeRunId ?? "").trim();
+  if (!routeRunId) {
+    return c.json({ message: "routeRunId is required." }, 400);
+  }
 
-  const proofsUploaded = (
-    db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM proofs WHERE company_id = ? AND created_at >= ?`,
-      )
-      .get(companyId, fromMillis) as { count: number }
-  ).count;
+  const driverId = String(body.driverId ?? c.get("driverId") ?? "").trim();
+  const driverDeviceId = String(body.driverDeviceId ?? c.get("driverDeviceId") ?? "").trim();
+  const vehicleId = String(body.vehicleId ?? c.get("vehicleId") ?? "").trim();
+  const routeDateIso = String(
+    body.routeDateIso ?? new Date().toISOString().slice(0, 10),
+  ).trim();
+  const now = Date.now();
+  const createdAt = Number(body.createdAtMillis ?? now);
+  const reportId = `dr-${crypto
+    .createHash("sha1")
+    .update(`${companyId}|${driverId}|${routeRunId}|${routeDateIso}`)
+    .digest("hex")
+    .slice(0, 16)}`;
 
-  const activeDrivers = (
-    db
-      .prepare(
-        `SELECT COUNT(DISTINCT driver_id) AS count
-         FROM heartbeats
-         WHERE company_id = ? AND created_at >= ?`,
-      )
-      .get(companyId, fromMillis) as { count: number }
-  ).count;
+  db.prepare(
+    `INSERT INTO daily_reports (
+      report_id, company_id, driver_id, driver_device_id, vehicle_id, route_run_id,
+      route_date_iso, total_stops, completed_stops, skipped_stops, failed_stops,
+      proof_count, receipt_count, total_distance_meters, total_drive_time_seconds,
+      created_at, received_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(company_id, driver_id, route_run_id, route_date_iso) DO UPDATE SET
+      driver_device_id = excluded.driver_device_id,
+      vehicle_id = excluded.vehicle_id,
+      total_stops = excluded.total_stops,
+      completed_stops = excluded.completed_stops,
+      skipped_stops = excluded.skipped_stops,
+      failed_stops = excluded.failed_stops,
+      proof_count = excluded.proof_count,
+      receipt_count = excluded.receipt_count,
+      total_distance_meters = excluded.total_distance_meters,
+      total_drive_time_seconds = excluded.total_drive_time_seconds,
+      created_at = excluded.created_at,
+      received_at = excluded.received_at`
+  ).run(
+    reportId,
+    companyId,
+    driverId,
+    driverDeviceId,
+    vehicleId,
+    routeRunId,
+    routeDateIso,
+    Number(body.totalStops ?? 0),
+    Number(body.completedStops ?? 0),
+    Number(body.skippedStops ?? 0),
+    Number(body.failedStops ?? 0),
+    Number(body.proofCount ?? 0),
+    Number(body.receiptCount ?? 0),
+    Number(body.totalDistanceMeters ?? 0),
+    Number(body.totalDriveTimeSeconds ?? 0),
+    createdAt,
+    now,
+  );
 
   return c.json({
-    message: "Daily report ready.",
-    report: {
-      dateIso: startOfDay.toISOString().slice(0, 10),
-      stopsCompleted,
-      proofsUploaded,
-      activeDrivers,
-      serverTimeMillis: Date.now(),
-    },
+    message: "Daily report stored.",
+    reportId,
+    routeRunId,
+    routeDateIso,
+  });
+});
+
+companyRoutes.get("/route47/companies/:companyId/reports/daily", (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const routeDateIso = c.req.query("routeDateIso")?.trim();
+  const driverId = c.req.query("driverId")?.trim();
+  const routeRunId = c.req.query("routeRunId")?.trim();
+  const fromDateIso = c.req.query("fromDateIso")?.trim();
+  const toDateIso = c.req.query("toDateIso")?.trim();
+
+  const conditions = ["company_id = ?"];
+  const params: Array<string> = [companyId];
+
+  if (routeDateIso) {
+    conditions.push("route_date_iso = ?");
+    params.push(routeDateIso);
+  }
+  if (driverId) {
+    conditions.push("driver_id = ?");
+    params.push(driverId);
+  }
+  if (routeRunId) {
+    conditions.push("route_run_id = ?");
+    params.push(routeRunId);
+  }
+  if (fromDateIso) {
+    conditions.push("route_date_iso >= ?");
+    params.push(fromDateIso);
+  }
+  if (toDateIso) {
+    conditions.push("route_date_iso <= ?");
+    params.push(toDateIso);
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT report_id, company_id, driver_id, driver_device_id, vehicle_id, route_run_id,
+              route_date_iso, total_stops, completed_stops, skipped_stops, failed_stops,
+              proof_count, receipt_count, total_distance_meters, total_drive_time_seconds,
+              created_at, received_at
+       FROM daily_reports
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY route_date_iso DESC, received_at DESC
+       LIMIT 500`,
+    )
+    .all(...params) as DailyReportRow[];
+
+  return c.json({
+    message: `${rows.length} daily report(s).`,
+    reports: rows.map(dailyReportToJson),
   });
 });

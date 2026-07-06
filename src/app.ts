@@ -6,6 +6,16 @@ import "./routes/live.js";
 import "./routes/plans-geofences.js";
 import "./routes/proofs.js";
 import "./routes/admin-fleet.js";
+import { migrateFlatProofPaths } from "./proof-migration.js";
+
+try {
+  const migratedProofs = migrateFlatProofPaths();
+  if (migratedProofs > 0) {
+    console.log(`Migrated ${migratedProofs} flat proof file(s) into folder layout.`);
+  }
+} catch (error) {
+  console.warn("Proof path migration skipped:", error);
+}
 
 export const app = new Hono();
 

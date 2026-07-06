@@ -155,6 +155,33 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_activity_events_company_driver_time
     ON activity_events(company_id, driver_id, timestamp_millis DESC);
+
+  CREATE TABLE IF NOT EXISTS daily_reports (
+    report_id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    driver_id TEXT NOT NULL DEFAULT '',
+    driver_device_id TEXT NOT NULL DEFAULT '',
+    vehicle_id TEXT NOT NULL DEFAULT '',
+    route_run_id TEXT NOT NULL DEFAULT '',
+    route_date_iso TEXT NOT NULL,
+    total_stops INTEGER NOT NULL DEFAULT 0,
+    completed_stops INTEGER NOT NULL DEFAULT 0,
+    skipped_stops INTEGER NOT NULL DEFAULT 0,
+    failed_stops INTEGER NOT NULL DEFAULT 0,
+    proof_count INTEGER NOT NULL DEFAULT 0,
+    receipt_count INTEGER NOT NULL DEFAULT 0,
+    total_distance_meters REAL NOT NULL DEFAULT 0,
+    total_drive_time_seconds INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    received_at INTEGER NOT NULL,
+    UNIQUE (company_id, driver_id, route_run_id, route_date_iso)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_daily_reports_company_date
+    ON daily_reports(company_id, route_date_iso DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_daily_reports_company_driver
+    ON daily_reports(company_id, driver_id, created_at DESC);
 `);
 
 function ensureGeofenceLinkageColumns() {
@@ -193,6 +220,26 @@ export type GeofenceRow = {
   updated_at: number;
 };
 
+export type DailyReportRow = {
+  report_id: string;
+  company_id: string;
+  driver_id: string;
+  driver_device_id: string;
+  vehicle_id: string;
+  route_run_id: string;
+  route_date_iso: string;
+  total_stops: number;
+  completed_stops: number;
+  skipped_stops: number;
+  failed_stops: number;
+  proof_count: number;
+  receipt_count: number;
+  total_distance_meters: number;
+  total_drive_time_seconds: number;
+  created_at: number;
+  received_at: number;
+};
+
 export type RoutePlanRow = {
   route_run_id: string;
   company_id: string;
@@ -226,6 +273,28 @@ export function geofenceToJson(row: GeofenceRow) {
     lastTriggeredAtMillis: row.last_triggered_at_millis || undefined,
     createdAtMillis: row.created_at,
     updatedAtMillis: row.updated_at,
+  };
+}
+
+export function dailyReportToJson(row: DailyReportRow) {
+  return {
+    reportId: row.report_id,
+    companyId: row.company_id,
+    driverId: row.driver_id,
+    driverDeviceId: row.driver_device_id,
+    vehicleId: row.vehicle_id,
+    routeRunId: row.route_run_id,
+    routeDateIso: row.route_date_iso,
+    totalStops: row.total_stops,
+    completedStops: row.completed_stops,
+    skippedStops: row.skipped_stops,
+    failedStops: row.failed_stops,
+    proofCount: row.proof_count,
+    receiptCount: row.receipt_count,
+    totalDistanceMeters: row.total_distance_meters,
+    totalDriveTimeSeconds: row.total_drive_time_seconds,
+    createdAtMillis: row.created_at,
+    receivedAtMillis: row.received_at,
   };
 }
 

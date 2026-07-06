@@ -166,6 +166,121 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
   });
 });
 
+type ProofRow = {
+  proof_id: string;
+  company_id: string;
+  driver_id: string;
+  route_run_id: string;
+  stop_id: string;
+  proof_type: string;
+  customer_name: string;
+  address: string;
+  file_name: string;
+  file_path: string;
+};
+
+function loadProofRow(companyId: string, proofId: string): ProofRow | undefined {
+  return db
+    .prepare(
+      `SELECT proof_id, company_id, driver_id, route_run_id, stop_id, proof_type,
+              customer_name, address, file_name, file_path
+       FROM proofs WHERE company_id = ? AND proof_id = ?`,
+    )
+    .get(companyId, proofId) as ProofRow | undefined;
+}
+
+function relocateProofFile(row: ProofRow, next: {
+  routeRunId: string;
+  proofType: string;
+  fileName: string;
+}): { storedPath: string; storedName: string } {
+  const { storedPath, storedName } = buildStoredProofPath({
+    companyId: row.company_id,
+    proofId: row.proof_id,
+    proofType: next.proofType,
+    routeRunId: next.routeRunId,
+    originalFileName: next.fileName,
+  });
+
+  if (storedPath !== row.file_path && row.file_path && fs.existsSync(row.file_path)) {
+    fs.mkdirSync(path.dirname(storedPath), { recursive: true });
+    try {
+      fs.renameSync(row.file_path, storedPath);
+    } catch {
+      fs.copyFileSync(row.file_path, storedPath);
+      try {
+        fs.unlinkSync(row.file_path);
+      } catch {
+        // Best-effort cleanup of the old flat path.
+      }
+    }
+  }
+
+  return { storedPath, storedName };
+}
+
+companyRoutes.patch("/route47/companies/:companyId/proofs/:proofId", async (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const proofId = c.req.param("proofId");
+  const body = await c.req.json<{
+    fileName?: string;
+    customerName?: string;
+    address?: string;
+    driverId?: string;
+    routeRunId?: string;
+    stopId?: string;
+    proofType?: string;
+  }>();
+
+  const row = loadProofRow(companyId, proofId);
+  if (!row) {
+    return c.json({ message: "Proof not found." }, 404);
+  }
+
+  const nextRouteRunId = body.routeRunId ?? row.route_run_id;
+  const nextProofType = body.proofType ?? row.proof_type;
+  const nextFileName = body.fileName ?? row.file_name;
+  const { storedPath, storedName } = relocateProofFile(row, {
+    routeRunId: nextRouteRunId,
+    proofType: nextProofType,
+    fileName: nextFileName,
+  });
+
+  db.prepare(
+    `UPDATE proofs SET
+      driver_id = ?,
+      route_run_id = ?,
+      stop_id = ?,
+      proof_type = ?,
+      customer_name = ?,
+      address = ?,
+      file_name = ?,
+      file_path = ?
+     WHERE company_id = ? AND proof_id = ?`,
+  ).run(
+    body.driverId ?? row.driver_id,
+    nextRouteRunId,
+    body.stopId ?? row.stop_id,
+    nextProofType,
+    body.customerName ?? row.customer_name,
+    body.address ?? row.address,
+    storedName,
+    storedPath,
+    companyId,
+    proofId,
+  );
+
+  return c.json({
+    message: "Proof updated.",
+    proofId,
+    storageFolder: buildProofFolderName(nextProofType),
+  });
+});
+
 companyRoutes.delete("/route47/companies/:companyId/proofs/:proofId", (c) => {
   if (!requireAdmin(c)) {
     return c.json({ message: "Admin API key required." }, 401);
