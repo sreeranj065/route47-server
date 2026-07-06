@@ -44,7 +44,87 @@ function latestRoutePlan(companyId: string, driverId: string): RoutePlanRow | un
     .get(companyId, driverId) as RoutePlanRow | undefined;
 }
 
+function normalizeStopStatus(raw: string | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value) return "";
+  const lower = value.toLowerCase();
+  if (lower === "completed") return "Completed";
+  if (lower === "skipped") return "Skipped";
+  if (lower === "failed") return "Failed";
+  if (lower === "arrived") return "Arrived";
+  if (lower === "active") return "Active";
+  if (lower === "pending") return "Pending";
+  if (lower === "delayed") return "Delayed";
+  return value;
+}
+
+function readStopStatusFromJson(stop: {
+  status?: string;
+  stopStatus?: string;
+  notes?: string;
+}): string {
+  const fromNotes = stop.notes?.startsWith("Status: ") ? stop.notes.slice(8) : "";
+  return normalizeStopStatus(stop.stopStatus ?? stop.status ?? fromNotes);
+}
+
+function latestProgressByStop(
+  companyId: string,
+  driverId: string,
+  routeRunId: string,
+): Map<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT stop_id AS stopId, stop_status AS stopStatus
+       FROM route_progress
+       WHERE company_id = ? AND driver_id = ? AND route_run_id = ?
+       ORDER BY created_at DESC`,
+    )
+    .all(companyId, driverId, routeRunId) as Array<{ stopId: string; stopStatus: string }>;
+
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const stopId = String(row.stopId ?? "").trim();
+    if (!stopId || map.has(stopId)) continue;
+    map.set(stopId, normalizeStopStatus(row.stopStatus));
+  }
+  return map;
+}
+
+function stopProgress(
+  companyId: string,
+  driverId: string,
+  plan: RoutePlanRow | undefined,
+): { completed: number; total: number } {
+  if (!plan) return { completed: 0, total: 0 };
+  try {
+    const stops = JSON.parse(plan.stops_json || "[]") as Array<{
+      stopId?: string;
+      status?: string;
+      stopStatus?: string;
+      notes?: string;
+    }>;
+    const total = stops.length;
+    if (total === 0) return { completed: 0, total: 0 };
+
+    const progressByStop = latestProgressByStop(companyId, driverId, plan.route_run_id);
+    let completed = 0;
+    for (const stop of stops) {
+      const stopId = String(stop.stopId ?? "").trim();
+      const fromProgress = stopId ? progressByStop.get(stopId) : undefined;
+      const status = fromProgress || readStopStatusFromJson(stop);
+      if (status === "Completed") completed++;
+    }
+    return { completed, total };
+  } catch {
+    return { completed: 0, total: 0 };
+  }
+}
+
 function driverStatus(companyId: string, driverId: string): string {
+  const plan = latestRoutePlan(companyId, driverId);
+  const { completed, total } = stopProgress(companyId, driverId, plan);
+  if (total > 0 && completed >= total) return "Offline";
+
   const cutoff = Date.now() - 1000 * 60 * 15;
   const heartbeat = db
     .prepare(
@@ -72,24 +152,9 @@ function driverStatus(companyId: string, driverId: string): string {
   return "Offline";
 }
 
-function stopProgress(plan: RoutePlanRow | undefined): { completed: number; total: number } {
-  if (!plan) return { completed: 0, total: 0 };
-  try {
-    const stops = JSON.parse(plan.stops_json || "[]") as Array<{ status?: string; notes?: string }>;
-    const total = stops.length;
-    const completed = stops.filter((stop) => {
-      const status = stop.status ?? (stop.notes?.startsWith("Status: ") ? stop.notes.slice(8) : "");
-      return status === "Completed";
-    }).length;
-    return { completed, total };
-  } catch {
-    return { completed: 0, total: 0 };
-  }
-}
-
 function mapDriverRecord(companyId: string, row: DriverRow, index: number) {
   const plan = latestRoutePlan(companyId, row.id);
-  const { completed, total } = stopProgress(plan);
+  const { completed, total } = stopProgress(companyId, row.id, plan);
   const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   return {

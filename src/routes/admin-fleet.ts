@@ -23,13 +23,27 @@ function proofTypeToEventType(proofType: string): string {
   return "DOCUMENT_UPLOADED";
 }
 
+function normalizeStopStatus(raw: string): string {
+  const value = raw.trim();
+  if (!value) return "";
+  const lower = value.toLowerCase();
+  if (lower === "completed") return "Completed";
+  if (lower === "skipped") return "Skipped";
+  if (lower === "failed") return "Failed";
+  if (lower === "arrived") return "Arrived";
+  if (lower === "active") return "Active";
+  if (lower === "pending") return "Pending";
+  return value;
+}
+
 function normalizeProgressEventType(eventType: string, stopStatus: string): string {
   const trimmed = eventType.trim();
   if (trimmed) return trimmed;
-  if (stopStatus === "Completed") return "STOP_COMPLETED";
-  if (stopStatus === "Skipped") return "STOP_SKIPPED";
-  if (stopStatus === "Failed") return "STOP_FAILED";
-  if (stopStatus === "Arrived") return "STOP_ARRIVED";
+  const normalized = normalizeStopStatus(stopStatus);
+  if (normalized === "Completed") return "STOP_COMPLETED";
+  if (normalized === "Skipped") return "STOP_SKIPPED";
+  if (normalized === "Failed") return "STOP_FAILED";
+  if (normalized === "Arrived") return "STOP_ARRIVED";
   return "ROUTE_PROGRESS";
 }
 
