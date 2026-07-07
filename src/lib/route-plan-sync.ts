@@ -14,6 +14,13 @@ export function normalizeStopStatus(raw: string | undefined): string {
   return value;
 }
 
+const TERMINAL_STOP_STATUSES = new Set(["Completed", "Failed", "Skipped"]);
+
+export function isTerminalStopStatus(raw: string | undefined): boolean {
+  const normalized = normalizeStopStatus(raw);
+  return TERMINAL_STOP_STATUSES.has(normalized);
+}
+
 export function readStopStatusFromJson(stop: {
   status?: string;
   stopStatus?: string;
@@ -82,8 +89,8 @@ export function stopProgress(
   companyId: string,
   driverId: string,
   plan: RoutePlanRow | undefined,
-): { completed: number; total: number } {
-  if (!plan) return { completed: 0, total: 0 };
+): { completed: number; terminal: number; total: number } {
+  if (!plan) return { completed: 0, terminal: 0, total: 0 };
   try {
     const stops = JSON.parse(plan.stops_json || "[]") as Array<{
       stopId?: string;
@@ -92,19 +99,21 @@ export function stopProgress(
       notes?: string;
     }>;
     const total = stops.length;
-    if (total === 0) return { completed: 0, total: 0 };
+    if (total === 0) return { completed: 0, terminal: 0, total: 0 };
 
     const progressByStop = latestProgressByStop(companyId, driverId, plan.route_run_id);
     let completed = 0;
+    let terminal = 0;
     for (const stop of stops) {
       const stopId = String(stop.stopId ?? "").trim();
       const fromProgress = stopId ? progressByStop.get(stopId) : undefined;
       const status = fromProgress || readStopStatusFromJson(stop);
       if (status === "Completed") completed++;
+      if (isTerminalStopStatus(status)) terminal++;
     }
-    return { completed, total };
+    return { completed, terminal, total };
   } catch {
-    return { completed: 0, total: 0 };
+    return { completed: 0, terminal: 0, total: 0 };
   }
 }
 
@@ -136,8 +145,10 @@ export function applyStopProgressToLatestPlan(
 
     if (!changed) return;
 
-    const allCompleted = stops.every(
-      (stop) => readStopStatusFromJson(stop as { stopStatus?: string; status?: string; notes?: string }) === "Completed",
+    const allTerminal = stops.every((stop) =>
+      isTerminalStopStatus(
+        readStopStatusFromJson(stop as { stopStatus?: string; status?: string; notes?: string }),
+      ),
     );
     const now = Date.now();
     db.prepare(
@@ -146,7 +157,7 @@ export function applyStopProgressToLatestPlan(
        WHERE company_id = ? AND route_run_id = ?`,
     ).run(
       JSON.stringify(stops),
-      allCompleted ? "completed" : "in_progress",
+      allTerminal ? "completed" : "in_progress",
       now,
       companyId,
       plan.route_run_id,
@@ -158,11 +169,15 @@ export function applyStopProgressToLatestPlan(
 
 export function driverStatus(companyId: string, driverId: string): string {
   const plan = latestRoutePlan(companyId, driverId);
-  const { completed, total } = stopProgress(companyId, driverId, plan);
+  const { completed, terminal, total } = stopProgress(companyId, driverId, plan);
 
   // No stops on the published current list — driver is not running an admin route.
   if (total === 0) return "Offline";
 
+  // Route finished when every stop reached a final state (Completed, Failed, or Skipped).
+  if (terminal >= total) return "Offline";
+
+  // Legacy: all stops marked Completed in plan JSON without terminal mix.
   if (completed >= total) return "Offline";
 
   const cutoff = Date.now() - 1000 * 60 * 15;
