@@ -3,6 +3,11 @@ import fs from "node:fs";
 import type { Hono } from "hono";
 import { hashPassword, isValidAdminKey } from "../auth.js";
 import { db, routePlanToJson, type RoutePlanRow } from "../db.js";
+import {
+  driverStatus as computeDriverStatus,
+  latestRoutePlan,
+  stopProgress,
+} from "../lib/route-plan-sync.js";
 
 type DriverRow = {
   id: string;
@@ -29,124 +34,8 @@ function requireAdmin(c: { req: { header: (name: string) => string | undefined }
   return isValidAdminKey(readAdminKey(c));
 }
 
-function latestRoutePlan(companyId: string, driverId: string): RoutePlanRow | undefined {
-  return db
-    .prepare(
-      `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
-       FROM route_plans
-       WHERE company_id = ? AND driver_id = ?
-       ORDER BY updated_at DESC
-       LIMIT 1`,
-    )
-    .get(companyId, driverId) as RoutePlanRow | undefined;
-}
-
-function normalizeStopStatus(raw: string | undefined): string {
-  const value = (raw ?? "").trim();
-  if (!value) return "";
-  const lower = value.toLowerCase();
-  if (lower === "completed") return "Completed";
-  if (lower === "skipped") return "Skipped";
-  if (lower === "failed") return "Failed";
-  if (lower === "arrived") return "Arrived";
-  if (lower === "active") return "Active";
-  if (lower === "pending") return "Pending";
-  if (lower === "delayed") return "Delayed";
-  return value;
-}
-
-function readStopStatusFromJson(stop: {
-  status?: string;
-  stopStatus?: string;
-  notes?: string;
-}): string {
-  const fromNotes = stop.notes?.startsWith("Status: ") ? stop.notes.slice(8) : "";
-  return normalizeStopStatus(stop.stopStatus ?? stop.status ?? fromNotes);
-}
-
-function latestProgressByStop(
-  companyId: string,
-  driverId: string,
-  routeRunId: string,
-): Map<string, string> {
-  const rows = db
-    .prepare(
-      `SELECT stop_id AS stopId, stop_status AS stopStatus
-       FROM route_progress
-       WHERE company_id = ? AND driver_id = ? AND route_run_id = ?
-       ORDER BY created_at DESC`,
-    )
-    .all(companyId, driverId, routeRunId) as Array<{ stopId: string; stopStatus: string }>;
-
-  const map = new Map<string, string>();
-  for (const row of rows) {
-    const stopId = String(row.stopId ?? "").trim();
-    if (!stopId || map.has(stopId)) continue;
-    map.set(stopId, normalizeStopStatus(row.stopStatus));
-  }
-  return map;
-}
-
-function stopProgress(
-  companyId: string,
-  driverId: string,
-  plan: RoutePlanRow | undefined,
-): { completed: number; total: number } {
-  if (!plan) return { completed: 0, total: 0 };
-  try {
-    const stops = JSON.parse(plan.stops_json || "[]") as Array<{
-      stopId?: string;
-      status?: string;
-      stopStatus?: string;
-      notes?: string;
-    }>;
-    const total = stops.length;
-    if (total === 0) return { completed: 0, total: 0 };
-
-    const progressByStop = latestProgressByStop(companyId, driverId, plan.route_run_id);
-    let completed = 0;
-    for (const stop of stops) {
-      const stopId = String(stop.stopId ?? "").trim();
-      const fromProgress = stopId ? progressByStop.get(stopId) : undefined;
-      const status = fromProgress || readStopStatusFromJson(stop);
-      if (status === "Completed") completed++;
-    }
-    return { completed, total };
-  } catch {
-    return { completed: 0, total: 0 };
-  }
-}
-
 function driverStatus(companyId: string, driverId: string): string {
-  const plan = latestRoutePlan(companyId, driverId);
-  const { completed, total } = stopProgress(companyId, driverId, plan);
-  if (total > 0 && completed >= total) return "Offline";
-
-  const cutoff = Date.now() - 1000 * 60 * 15;
-  const heartbeat = db
-    .prepare(
-      `SELECT created_at AS createdAt
-       FROM heartbeats
-       WHERE company_id = ? AND driver_id = ? AND created_at >= ?
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    )
-    .get(companyId, driverId, cutoff) as { createdAt: number } | undefined;
-
-  if (heartbeat) return "On Route";
-
-  const delayed = db
-    .prepare(
-      `SELECT stop_status AS stopStatus
-       FROM route_progress
-       WHERE company_id = ? AND driver_id = ? AND stop_status = 'Delayed'
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    )
-    .get(companyId, driverId) as { stopStatus: string } | undefined;
-
-  if (delayed) return "Delayed";
-  return "Offline";
+  return computeDriverStatus(companyId, driverId);
 }
 
 function mapDriverRecord(companyId: string, row: DriverRow, index: number) {

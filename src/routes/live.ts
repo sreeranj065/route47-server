@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { isValidAdminKey } from "../auth.js";
 import { companyRoutes } from "./auth.js";
 import { db, dailyReportToJson, type DailyReportRow } from "../db.js";
+import { applyStopProgressToLatestPlan } from "../lib/route-plan-sync.js";
 
 function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
   const auth = c.req.header("Authorization");
@@ -96,6 +97,13 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
     body.longitude ?? null,
     body.createdAtMillis ?? Date.now()
   );
+
+  const driverId = String(body.driverId ?? c.get("driverId") ?? "").trim();
+  const stopId = String(body.stopId ?? "").trim();
+  const stopStatus = String(body.stopStatus ?? "").trim();
+  if (driverId && stopId && stopStatus) {
+    applyStopProgressToLatestPlan(companyId, driverId, stopId, stopStatus);
+  }
 
   return c.json({ message: "Route progress update stored." });
 });
