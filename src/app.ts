@@ -6,6 +6,7 @@ import "./routes/live.js";
 import "./routes/plans-geofences.js";
 import "./routes/proofs.js";
 import "./routes/admin-fleet.js";
+import "./routes/business-search.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";
 
 try {
