@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { Hono } from "hono";
-import { hashPassword } from "../auth.js";
-import { DEMO_SERVER } from "../config.js";
+import { hashPassword, isValidAdminKey } from "../auth.js";
 import { db, routePlanToJson, type RoutePlanRow } from "../db.js";
 
 type DriverRow = {
@@ -27,9 +26,7 @@ function readAdminKey(c: { req: { header: (name: string) => string | undefined }
 }
 
 function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
-  const provided = readAdminKey(c);
-  return !!provided && provided === expected;
+  return isValidAdminKey(readAdminKey(c));
 }
 
 function latestRoutePlan(companyId: string, driverId: string): RoutePlanRow | undefined {

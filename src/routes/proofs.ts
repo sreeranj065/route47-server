@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DEMO_SERVER } from "../config.js";
+import { isValidAdminKey } from "../auth.js";
 import { companyRoutes } from "./auth.js";
 import { db, PROOFS_DIR } from "../db.js";
 import { buildProofFolderName, buildStoredProofPath } from "../proof-storage.js";
@@ -12,9 +12,7 @@ function readAdminKey(c: { req: { header: (name: string) => string | undefined }
 }
 
 function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
-  const provided = readAdminKey(c);
-  return !!provided && provided === expected;
+  return isValidAdminKey(readAdminKey(c));
 }
 
 companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {

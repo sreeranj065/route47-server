@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { db } from "./db.js";
-import { DEMO_SERVER } from "./config.js";
+import { SERVER_CONFIG } from "./config.js";
 
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
@@ -68,13 +68,19 @@ export function resolveDeviceToken(token: string | undefined) {
   return row;
 }
 
+export function getExpectedAdminApiKey(): string {
+  return process.env.ROUTE47_ADMIN_API_KEY?.trim() ?? "";
+}
+
+export function isValidAdminKey(provided: string | undefined): boolean {
+  const expected = getExpectedAdminApiKey();
+  const value = provided?.trim() ?? "";
+  if (!expected || !value || expected.length !== value.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected));
+}
+
 export function resolveAdminKey(provided: string | undefined): boolean {
-  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
-  if (!provided?.trim()) return false;
-  return crypto.timingSafeEqual(
-    Buffer.from(provided.trim()),
-    Buffer.from(expected)
-  );
+  return isValidAdminKey(provided);
 }
 
 export function newDriverDeviceId() {
@@ -95,7 +101,7 @@ export function buildConnectionResponse(input: {
 }) {
   return {
     message: input.message,
-    deploymentMode: DEMO_SERVER.deploymentMode,
+    deploymentMode: SERVER_CONFIG.deploymentMode,
     serverUrl: input.serverUrl,
     companyId: input.companyId,
     companyName: input.companyName,

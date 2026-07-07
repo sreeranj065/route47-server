@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { DEMO_SERVER, demoHealthPayload } from "./config.js";
+import { SERVER_CONFIG, buildHealthPayload } from "./config.js";
 import { authRoutes, companyRoutes } from "./routes/auth.js";
 import "./routes/live.js";
 import "./routes/plans-geofences.js";
@@ -21,8 +21,8 @@ export const app = new Hono();
 
 app.use("*", async (c, next) => {
   await next();
-  c.header("X-Route47-Server-Mode", DEMO_SERVER.deploymentMode);
-  c.header("X-Route47-Server-Name", DEMO_SERVER.name);
+  c.header("X-Route47-Server-Mode", SERVER_CONFIG.deploymentMode);
+  c.header("X-Route47-Server-Name", SERVER_CONFIG.name);
 });
 
 app.use(
@@ -43,12 +43,12 @@ app.use(
   })
 );
 
-app.get("/health", (c) => c.json(demoHealthPayload()));
+app.get("/health", (c) => c.json(buildHealthPayload()));
 
 // Minimal unauthenticated probe for hosting platforms (Render healthCheckPath,
 // Railway healthcheck). /health stays as the richer payload used by the apps.
 app.get("/healthz", (c) =>
-  c.json({ ok: true, version: DEMO_SERVER.version })
+  c.json({ ok: true, version: SERVER_CONFIG.version })
 );
 
 app.route("/", authRoutes);

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { DEMO_SERVER } from "../config.js";
+import { isValidAdminKey } from "../auth.js";
 import { companyRoutes } from "./auth.js";
 import { db, dailyReportToJson, type DailyReportRow } from "../db.js";
 
@@ -10,9 +10,7 @@ function readAdminKey(c: { req: { header: (name: string) => string | undefined }
 }
 
 function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
-  const provided = readAdminKey(c);
-  return !!provided && provided === expected;
+  return isValidAdminKey(readAdminKey(c));
 }
 
 companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) => {

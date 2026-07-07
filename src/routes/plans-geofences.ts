@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { DEMO_SERVER } from "../config.js";
+import { isValidAdminKey } from "../auth.js";
 import { companyRoutes } from "./auth.js";
 import { db, geofenceToJson, getCompany, routePlanToJson, type GeofenceRow, type RoutePlanRow } from "../db.js";
 
@@ -14,9 +14,7 @@ function readAdminKey(c: { req: { header: (name: string) => string | undefined }
 }
 
 function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  const expected = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
-  const provided = readAdminKey(c);
-  return !!provided && provided === expected;
+  return isValidAdminKey(readAdminKey(c));
 }
 
 companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
@@ -106,6 +104,63 @@ companyRoutes.post("/route47/companies/:companyId/admin-route-plans", async (c) 
   return c.json({
     message: `Published ${published.length} route plan(s).`,
     publishedRouteRunIds: published,
+  });
+});
+
+companyRoutes.get("/route47/companies/:companyId/admin/company", (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const company = getCompany(companyId);
+  if (!company) {
+    return c.json({ message: "Company not found." }, 404);
+  }
+
+  return c.json({
+    id: company.id,
+    name: company.name,
+    createdAt: new Date(company.createdAt).toISOString(),
+    updatedAt: null,
+  });
+});
+
+companyRoutes.patch("/route47/companies/:companyId/admin/company", async (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const body = await c.req.json<{
+    name?: string;
+    address?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    contactEmail?: string;
+    contactPhone?: string;
+  }>();
+
+  const now = Date.now();
+  const name = body.name?.trim() || companyId;
+
+  db.prepare(
+    `INSERT INTO companies (id, name, created_at) VALUES (?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name`,
+  ).run(companyId, name, now);
+
+  const company = getCompany(companyId);
+
+  return c.json({
+    id: companyId,
+    name: company?.name ?? name,
+    address: body.address ?? "",
+    latitude: body.latitude ?? null,
+    longitude: body.longitude ?? null,
+    contactEmail: body.contactEmail ?? "",
+    contactPhone: body.contactPhone ?? "",
+    createdAt: company ? new Date(company.createdAt).toISOString() : new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString(),
   });
 });
 

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { Hono } from "hono";
-import { bearerToken, buildConnectionResponse, createDeviceToken, newDriverDeviceId, resolveDeviceToken, verifyPassword } from "../auth.js";
-import { DEMO_SERVER, demoHealthPayload } from "../config.js";
+import { bearerToken, buildConnectionResponse, createDeviceToken, isValidAdminKey, newDriverDeviceId, resolveDeviceToken, verifyPassword } from "../auth.js";
+import { buildHealthPayload } from "../config.js";
 import { db, getCompany } from "../db.js";
 import { registerDriverAdminRoutes } from "./driver-admin-routes.js";
 
@@ -115,7 +115,7 @@ authRoutes.post("/route47/invites/redeem", async (c) => {
 
   return c.json(
     buildConnectionResponse({
-      message: "Device connected to Route47 demo server.",
+      message: "Device connected to company server.",
       serverUrl: publicServerUrl(c),
       companyId: invite.companyId,
       companyName: company.name,
@@ -184,7 +184,7 @@ authRoutes.post("/route47/drivers/login", async (c) => {
 
   return c.json(
     buildConnectionResponse({
-      message: "Signed in to Route47 demo server.",
+      message: "Signed in to company server.",
       serverUrl: publicServerUrl(c),
       companyId: driver.companyId,
       companyName: company.name,
@@ -212,11 +212,9 @@ companyRoutes.use("/route47/companies/:companyId/*", async (c, next) => {
     return c.json({ message: "companyId mismatch." }, 400);
   }
 
-  const expectedAdminKey = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
   const bearer = bearerToken(c.req.header("Authorization"));
   const adminKeyHeader = c.req.header("X-Route47-Admin-Key")?.trim();
-  const isAdmin =
-    adminKeyHeader === expectedAdminKey || bearer === expectedAdminKey;
+  const isAdmin = isValidAdminKey(adminKeyHeader) || isValidAdminKey(bearer);
 
   if (isAdmin) {
     c.set("companyId", companyId);
@@ -256,21 +254,20 @@ companyRoutes.get("/route47/companies/:companyId/health", (c) => {
   const company = getCompany(companyId);
 
   return c.json(
-    demoHealthPayload({
+    buildHealthPayload({
       companyId,
-      name: company?.name ?? DEMO_SERVER.defaultCompanyName,
+      name: company?.name ?? "",
       message: company
-        ? `${company.name} demo fleet is online.`
-        : "Demo server is online. Use seeded company demo-co for testing.",
+        ? `${company.name} fleet server is online.`
+        : "Company not found. Create the company before connecting apps.",
     })
   );
 });
 
 function requireAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
-  const expectedAdminKey = process.env.ROUTE47_ADMIN_API_KEY ?? DEMO_SERVER.defaultAdminApiKey;
   const bearer = bearerToken(c.req.header("Authorization"));
   const adminKeyHeader = c.req.header("X-Route47-Admin-Key")?.trim();
-  return adminKeyHeader === expectedAdminKey || bearer === expectedAdminKey;
+  return isValidAdminKey(adminKeyHeader) || isValidAdminKey(bearer);
 }
 
 companyRoutes.post("/route47/companies/:companyId/admin/invites", async (c) => {

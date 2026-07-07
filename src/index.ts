@@ -1,10 +1,8 @@
 import { serve } from "@hono/node-server";
 import { app } from "./app.js";
-import { DEMO_SERVER, SERVER_VERSION } from "./config.js";
+import { SERVER_CONFIG, SERVER_VERSION } from "./config.js";
 import { DATA_DIR, DB_PATH } from "./db.js";
-import { seedDemoData } from "./seed.js";
 
-// Render/Railway inject PORT; 4700 is the local dev default only.
 function resolvePort(): number {
   const raw = process.env.PORT?.trim();
   if (raw) {
@@ -16,24 +14,19 @@ function resolvePort(): number {
 }
 
 const port = resolvePort();
-// Bind all interfaces so the server is reachable inside containers.
 const hostname = process.env.HOST ?? "0.0.0.0";
 
-seedDemoData();
-
-console.log(`${DEMO_SERVER.name} v${SERVER_VERSION}`);
-console.log(DEMO_SERVER.purpose);
+console.log(`${SERVER_CONFIG.name} v${SERVER_VERSION}`);
 console.log(`Listening on http://${hostname}:${port}`);
 console.log(`Data directory: ${DATA_DIR}`);
 console.log(`Database: ${DB_PATH}`);
-console.log("");
-console.log("Seeded demo fleet:");
-console.log(`  company: ${DEMO_SERVER.defaultCompanyId}`);
-console.log(`  driver:  ${DEMO_SERVER.defaultDriverUsername} / ${DEMO_SERVER.defaultDriverPassword}`);
-console.log(`  invite:  ${DEMO_SERVER.defaultInviteCode}`);
-console.log("  admin:   X-Route47-Admin-Key (set ROUTE47_ADMIN_API_KEY in production)");
-console.log("");
-console.log("Production fleets use a customer-owned Route47 Customer Server (see CUSTOMER_SERVER.md).");
+
+if (!process.env.ROUTE47_ADMIN_API_KEY?.trim()) {
+  console.warn("");
+  console.warn("ROUTE47_ADMIN_API_KEY is not set — admin API endpoints will reject all requests.");
+  console.warn("Set ROUTE47_ADMIN_API_KEY before connecting the Admin app.");
+}
+
 console.log("");
 console.log("Driver app requires HTTPS. For local testing:");
 console.log(`  ngrok http ${port}`);

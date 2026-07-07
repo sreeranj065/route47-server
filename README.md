@@ -54,8 +54,8 @@ Set `ROUTE47_PUBLIC_URL` to that HTTPS domain so login responses hand drivers th
 |----------|---------|-------------|
 | `PORT` | `4700` | HTTP port. Render/Railway inject this automatically. |
 | `DATA_DIR` | `<repo>/data` locally, `/data` in Docker | Single directory for ALL persistent state: SQLite DB + proof photos. Mount your volume here. |
-| `ROUTE47_DB_PATH` | `$DATA_DIR/route47-demo.db` | Override the SQLite file path (rarely needed). |
-| `ROUTE47_ADMIN_API_KEY` | `demo-admin-key` | Admin API key (header `X-Route47-Admin-Key`). **Always set this in production.** |
+| `ROUTE47_DB_PATH` | `$DATA_DIR/route47.db` | Override the SQLite file path (rarely needed). |
+| `ROUTE47_ADMIN_API_KEY` | *(none — required)* | Admin API key (header `X-Route47-Admin-Key`). **Must be set before using the Admin app.** |
 | `ROUTE47_PUBLIC_URL` | request origin (proxy-aware) | Public HTTPS URL returned to drivers on login/invite redemption. |
 | `HOST` | `0.0.0.0` | Bind address. |
 
@@ -76,14 +76,7 @@ npm run dev
 
 Listens on `http://0.0.0.0:4700`; data goes to `./data/` exactly as before (no env vars needed). `npm run build` compiles to `dist/`, `npm run start:dist` runs the compiled output.
 
-### Seeded demo credentials
-
-| Item | Value |
-|------|--------|
-| Company ID | `demo-co` |
-| Driver login | `demo` / `demo123` |
-| Invite code | `DEMO-INVITE-001` |
-| Admin API key | `demo-admin-key` (only when `ROUTE47_ADMIN_API_KEY` is unset) |
+Set `ROUTE47_ADMIN_API_KEY` before connecting the Admin app. The database starts empty — create your company during Admin setup (Company ID + admin key).
 
 The Android driver app **requires HTTPS** for fleet login. For local dev:
 
@@ -139,7 +132,7 @@ Implements the `/route47/...` paths the driver app and Admin app expect.
 
 ```text
 $DATA_DIR/
-├── route47-demo.db      # SQLite (companies, drivers, invites, plans, proofs index…)
+├── route47.db           # SQLite (companies, drivers, invites, plans, proofs index…)
 └── proofs/
     └── {companyId}/     # proof-of-delivery photo files
 ```

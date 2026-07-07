@@ -11,7 +11,7 @@ export const ROOT_DIR = path.resolve(__dirname, "..");
 // Defaults to <repo>/data for local dev, same as before.
 export const DATA_DIR = process.env.DATA_DIR?.trim() || path.join(ROOT_DIR, "data");
 export const PROOFS_DIR = path.join(DATA_DIR, "proofs");
-export const DB_PATH = process.env.ROUTE47_DB_PATH ?? path.join(DATA_DIR, "route47-demo.db");
+export const DB_PATH = process.env.ROUTE47_DB_PATH ?? path.join(DATA_DIR, "route47.db");
 
 fs.mkdirSync(PROOFS_DIR, { recursive: true });
 
