@@ -159,7 +159,11 @@ export function applyStopProgressToLatestPlan(
 export function driverStatus(companyId: string, driverId: string): string {
   const plan = latestRoutePlan(companyId, driverId);
   const { completed, total } = stopProgress(companyId, driverId, plan);
-  if (total > 0 && completed >= total) return "Offline";
+
+  // No stops on the published current list — driver is not running an admin route.
+  if (total === 0) return "Offline";
+
+  if (completed >= total) return "Offline";
 
   const cutoff = Date.now() - 1000 * 60 * 15;
   const heartbeat = db
