@@ -1,15 +1,9 @@
-import { isValidAdminKey } from "../auth.js";
+import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db } from "../db.js";
 
-function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
-  const auth = c.req.header("Authorization");
-  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
-}
-
-function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  return isValidAdminKey(readAdminKey(c));
+function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
+  return hasAdminAccess(c);
 }
 
 function proofTypeToEventType(proofType: string): string {
@@ -105,6 +99,21 @@ companyRoutes.post("/route47/companies/:companyId/activity/sync", async (c) => {
       now,
     );
     synced += 1;
+  }
+
+  if (synced > 0) {
+    const { notifyActivityEvents } = await import("../lib/route-notification-hooks.js");
+    notifyActivityEvents(
+      companyId,
+      events
+        .filter((event) => event.eventId?.trim())
+        .map((event) => ({
+          driverId: event.driverId?.trim() || sessionDriverId,
+          routeId: event.routeId,
+          stopId: event.stopId,
+          eventType: event.eventType,
+        })),
+    );
   }
 
   return c.json({

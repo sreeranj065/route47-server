@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { Hono } from "hono";
-import { bearerToken, buildConnectionResponse, createDeviceToken, isValidAdminKey, newDriverDeviceId, resolveDeviceToken, verifyPassword } from "../auth.js";
+import { bearerToken, buildConnectionResponse, createDeviceToken, getExpectedAdminApiKey, newDriverDeviceId, resolveDeviceToken, verifyPassword } from "../auth.js";
 import { buildHealthPayload } from "../config.js";
 import { db, getCompany } from "../db.js";
+import type { AdminIdentity } from "../lib/admin-auth.js";
+import { readAdminKeyFromHeaders, resolveAdminIdentity } from "../lib/admin-auth.js";
 import { registerDriverAdminRoutes } from "./driver-admin-routes.js";
 
 type AuthEnv = {
@@ -11,6 +13,7 @@ type AuthEnv = {
     driverId: string;
     driverDeviceId: string;
     vehicleId: string;
+    admin?: AdminIdentity;
   };
 };
 
@@ -214,13 +217,14 @@ companyRoutes.use("/route47/companies/:companyId/*", async (c, next) => {
 
   const bearer = bearerToken(c.req.header("Authorization"));
   const adminKeyHeader = c.req.header("X-Route47-Admin-Key")?.trim();
-  const isAdmin = isValidAdminKey(adminKeyHeader) || isValidAdminKey(bearer);
+  const adminIdentity = resolveAdminIdentity(companyId, readAdminKeyFromHeaders(c.req.header("Authorization"), adminKeyHeader));
 
-  if (isAdmin) {
+  if (adminIdentity) {
     c.set("companyId", companyId);
     c.set("driverId", c.req.header("X-Route47-Driver-Id") ?? "");
     c.set("driverDeviceId", c.req.header("X-Route47-Device-Id") ?? "");
     c.set("vehicleId", c.req.header("X-Route47-Vehicle-Id") ?? "");
+    c.set("admin", adminIdentity);
     return next();
   }
 
@@ -264,10 +268,8 @@ companyRoutes.get("/route47/companies/:companyId/health", (c) => {
   );
 });
 
-function requireAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
-  const bearer = bearerToken(c.req.header("Authorization"));
-  const adminKeyHeader = c.req.header("X-Route47-Admin-Key")?.trim();
-  return isValidAdminKey(adminKeyHeader) || isValidAdminKey(bearer);
+function requireAdminKey(c: { req: { header: (name: string) => string | undefined }; get: (key: "admin") => AdminIdentity | undefined }) {
+  return c.get("admin") != null;
 }
 
 companyRoutes.post("/route47/companies/:companyId/admin/invites", async (c) => {

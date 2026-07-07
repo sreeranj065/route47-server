@@ -1,18 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isValidAdminKey } from "../auth.js";
+import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db, PROOFS_DIR } from "../db.js";
 import { buildProofFolderName, buildStoredProofPath } from "../proof-storage.js";
 
-function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
-  const auth = c.req.header("Authorization");
-  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
-}
-
-function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  return isValidAdminKey(readAdminKey(c));
+function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
+  return hasAdminAccess(c);
 }
 
 companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
@@ -93,6 +87,16 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     file.type || "application/octet-stream",
     createdAtMillis
   );
+
+  const { notifyProofUploaded } = await import("../lib/route-notification-hooks.js");
+  notifyProofUploaded({
+    companyId,
+    driverId,
+    proofType,
+    customerName,
+    routeRunId,
+    stopId,
+  });
 
   return c.json({
     message: "Proof uploaded.",

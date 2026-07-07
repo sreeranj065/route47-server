@@ -35,7 +35,7 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     serverVersion: SERVER_VERSION,
     version: SERVER_VERSION,
     serverTimeMillis: Date.now(),
-    adminFeatures: ["drivers-roster", "drivers-create", "activity-sync"],
+    adminFeatures: ["drivers-roster", "drivers-create", "activity-sync", "admin-team", "push-notifications"],
     ...extra,
   };
 }

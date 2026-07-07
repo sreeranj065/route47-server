@@ -7,6 +7,10 @@ import "./routes/plans-geofences.js";
 import "./routes/proofs.js";
 import "./routes/admin-fleet.js";
 import "./routes/business-search.js";
+import "./routes/admin-team.js";
+import "./routes/notifications.js";
+import "./lib/branch-filter.js";
+import { adminInviteRoutes } from "./routes/admin-team.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";
 
 try {
@@ -54,6 +58,7 @@ app.get("/healthz", (c) =>
 
 app.route("/", authRoutes);
 app.route("/", companyRoutes);
+app.route("/", adminInviteRoutes);
 
 app.notFound((c) => c.json({ message: `Not found: ${c.req.method} ${c.req.path}` }, 404));
 

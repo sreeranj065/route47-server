@@ -203,6 +203,106 @@ function ensureGeofenceLinkageColumns() {
 
 ensureGeofenceLinkageColumns();
 
+function ensureTeamAndNotificationTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS admins (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'admin',
+      api_key TEXT,
+      invite_code TEXT,
+      invited_by TEXT,
+      status TEXT NOT NULL DEFAULT 'invited',
+      disabled_at INTEGER,
+      created_at INTEGER NOT NULL,
+      redeemed_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admins_company ON admins (company_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_admins_invite_code ON admins (invite_code);
+
+    CREATE TABLE IF NOT EXISTS organization_licenses (
+      company_id TEXT PRIMARY KEY,
+      plan TEXT NOT NULL DEFAULT 'standard',
+      max_admin_users INTEGER NOT NULL DEFAULT 3,
+      max_drivers INTEGER,
+      status TEXT NOT NULL DEFAULT 'active',
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS company_branches (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      address TEXT NOT NULL DEFAULT '',
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_company_branches_company ON company_branches (company_id);
+
+    CREATE TABLE IF NOT EXISTS admin_branch_access (
+      company_id TEXT NOT NULL,
+      admin_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (company_id, admin_id, branch_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS push_tokens (
+      token TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      recipient_type TEXT NOT NULL,
+      recipient_id TEXT NOT NULL,
+      device_id TEXT NOT NULL DEFAULT '',
+      platform TEXT NOT NULL DEFAULT 'android',
+      app_version TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_push_tokens_recipient
+      ON push_tokens (company_id, recipient_type, recipient_id);
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      recipient_type TEXT NOT NULL,
+      recipient_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'system',
+      priority TEXT NOT NULL DEFAULT 'normal',
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      data_json TEXT NOT NULL DEFAULT '{}',
+      branch_id TEXT NOT NULL DEFAULT '',
+      read_at INTEGER,
+      created_at INTEGER NOT NULL,
+      push_sent_at INTEGER,
+      push_attempts INTEGER NOT NULL DEFAULT 0,
+      push_last_error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_notifications_recipient
+      ON notifications (company_id, recipient_type, recipient_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS notification_preferences (
+      company_id TEXT NOT NULL,
+      recipient_type TEXT NOT NULL,
+      recipient_id TEXT NOT NULL,
+      preference_key TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (company_id, recipient_type, recipient_id, preference_key)
+    );
+  `);
+}
+
+ensureTeamAndNotificationTables();
+
 export type GeofenceRow = {
   id: string;
   company_id: string;

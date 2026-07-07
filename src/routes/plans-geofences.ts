@@ -1,20 +1,15 @@
 import crypto from "node:crypto";
-import { isValidAdminKey } from "../auth.js";
+import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db, geofenceToJson, getCompany, routePlanToJson, type GeofenceRow, type RoutePlanRow } from "../db.js";
+import { notifyRoutePlanPublished } from "../lib/route-notification-hooks.js";
 
 const GEOFENCE_SELECT = `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
   driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
   FROM geofences`;
 
-function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
-  const auth = c.req.header("Authorization");
-  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
-}
-
-function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  return isValidAdminKey(readAdminKey(c));
+function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
+  return hasAdminAccess(c);
 }
 
 companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
@@ -87,18 +82,34 @@ companyRoutes.post("/route47/companies/:companyId/admin-route-plans", async (c) 
     const routeRunId = String(plan.routeRunId ?? plan.route_run_id ?? "").trim();
     if (!routeRunId) continue;
 
+    const existing = db
+      .prepare(`SELECT driver_id AS driverId, stops_json AS stopsJson FROM route_plans WHERE company_id = ? AND route_run_id = ?`)
+      .get(companyId, routeRunId) as { driverId?: string; stopsJson?: string } | undefined;
+
+    const driverId = String(plan.driverId ?? plan.driver_id ?? "");
+    const stops = Array.isArray(plan.stops) ? plan.stops : [];
+
     upsert.run(
       routeRunId,
       companyId,
-      String(plan.driverId ?? plan.driver_id ?? ""),
+      driverId,
       String(plan.vehicleId ?? plan.vehicle_id ?? ""),
       String(plan.routeDateIso ?? plan.route_date_iso ?? new Date().toISOString().slice(0, 10)),
       String(plan.status ?? "published"),
-      JSON.stringify(plan.stops ?? []),
+      JSON.stringify(stops),
       now,
       now
     );
     published.push(routeRunId);
+
+    notifyRoutePlanPublished({
+      companyId,
+      routeRunId,
+      driverId,
+      previousDriverId: existing?.driverId,
+      stopCount: stops.length,
+      isNew: !existing,
+    });
   }
 
   return c.json({

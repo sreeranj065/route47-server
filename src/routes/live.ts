@@ -1,17 +1,11 @@
 import crypto from "node:crypto";
-import { isValidAdminKey } from "../auth.js";
+import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db, dailyReportToJson, type DailyReportRow } from "../db.js";
 import { applyStopProgressToLatestPlan } from "../lib/route-plan-sync.js";
 
-function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
-  const auth = c.req.header("Authorization");
-  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
-}
-
-function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  return isValidAdminKey(readAdminKey(c));
+function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
+  return hasAdminAccess(c);
 }
 
 companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) => {
@@ -164,8 +158,20 @@ companyRoutes.get("/route47/companies/:companyId/devices/locations", (c) => {
 });
 
 companyRoutes.post("/route47/companies/:companyId/sync/request", async (c) => {
-  const body = await c.req.json<{ syncTypes?: string[] }>().catch(() => ({ syncTypes: [] }));
-  const syncTypes = body.syncTypes ?? [];
+  const companyId = c.req.param("companyId");
+  let parsedBody: { syncTypes?: string[]; driverId?: string; routeRunId?: string } = { syncTypes: [] };
+  try {
+    parsedBody = await c.req.json<{ syncTypes?: string[]; driverId?: string; routeRunId?: string }>();
+  } catch {
+    parsedBody = { syncTypes: [] };
+  }
+  const syncTypes = parsedBody.syncTypes ?? [];
+  const driverId = parsedBody.driverId?.trim() || c.get("driverId")?.trim() || "";
+
+  if (driverId) {
+    const { notifySilentSync } = await import("../lib/route-notification-hooks.js");
+    notifySilentSync(companyId, driverId, parsedBody.routeRunId?.trim() ?? "");
+  }
 
   return c.json({
     message: `Sync request accepted for: ${syncTypes.join(", ") || "all"}.`,

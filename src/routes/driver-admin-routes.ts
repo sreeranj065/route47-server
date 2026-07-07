@@ -1,7 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { Hono } from "hono";
-import { hashPassword, isValidAdminKey } from "../auth.js";
+import { hashPassword } from "../auth.js";
+import type { AdminIdentity } from "../lib/admin-auth.js";
+import {
+  adminCanAccessDriver,
+  listAccessibleDriverIds,
+  resolveDriverBranchId,
+} from "../lib/branch-filter.js";
+import { hasAdminAccess } from "../lib/route-admin.js";
 import { db, routePlanToJson, type RoutePlanRow } from "../db.js";
 import {
   driverStatus as computeDriverStatus,
@@ -14,6 +21,7 @@ type DriverRow = {
   displayName: string;
   username: string;
   vehicleId: string;
+  branchId: string;
 };
 
 type DriverPatchBody = {
@@ -22,16 +30,15 @@ type DriverPatchBody = {
   vehicleId?: string;
   username?: string;
   password?: string;
+  branchId?: string;
 };
 
-function readAdminKey(c: { req: { header: (name: string) => string | undefined } }) {
-  const auth = c.req.header("Authorization");
-  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return c.req.header("X-Route47-Admin-Key")?.trim() ?? bearer;
+function getAdmin(c: { get: (key: "admin") => AdminIdentity | undefined }) {
+  return c.get("admin") ?? null;
 }
 
-function requireAdmin(c: { req: { header: (name: string) => string | undefined } }) {
-  return isValidAdminKey(readAdminKey(c));
+function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
+  return hasAdminAccess(c);
 }
 
 function driverStatus(companyId: string, driverId: string): string {
@@ -50,6 +57,7 @@ function mapDriverRecord(companyId: string, row: DriverRow, index: number) {
     username: row.username,
     status: driverStatus(companyId, row.id),
     vehicleId: row.vehicleId || plan?.vehicle_id || "",
+    branchId: row.branchId || "",
     routeId: plan?.route_run_id || `RT-${100 + index}`,
     completedStops: completed,
     totalStops: total,
@@ -68,6 +76,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     }
 
     const companyId = c.req.param("companyId");
+    const admin = getAdmin(c);
     const body = await c.req.json<{
       id?: string;
       name?: string;
@@ -75,6 +84,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
       vehicleId?: string;
       username?: string;
       password?: string;
+      branchId?: string;
     }>();
 
     const company = db.prepare(`SELECT id FROM companies WHERE id = ?`).get(companyId);
@@ -108,16 +118,17 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     }
 
     const password = body.password?.trim() || crypto.randomBytes(6).toString("hex");
+    const branchId = resolveDriverBranchId(companyId, body.branchId);
     const now = Date.now();
 
     db.prepare(
-      `INSERT INTO drivers (id, company_id, username, password_hash, display_name, vehicle_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(driverId, companyId, username, hashPassword(password), displayName, vehicleId, now);
+      `INSERT INTO drivers (id, company_id, username, password_hash, display_name, vehicle_id, branch_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(driverId, companyId, username, hashPassword(password), displayName, vehicleId, branchId, now);
 
     const row = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
          FROM drivers WHERE company_id = ? AND id = ?`,
       )
       .get(companyId, driverId) as DriverRow;
@@ -137,18 +148,23 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     }
 
     const companyId = c.req.param("companyId");
+    const admin = getAdmin(c);
+    const accessibleIds = listAccessibleDriverIds(companyId, admin);
     const rows = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
          FROM drivers
          WHERE company_id = ?
          ORDER BY display_name ASC, username ASC`,
       )
       .all(companyId) as DriverRow[];
 
+    const filtered =
+      accessibleIds === null ? rows : rows.filter((row) => accessibleIds.includes(row.id));
+
     return c.json({
-      message: `${rows.length} driver(s).`,
-      drivers: rows.map((row, index) => mapDriverRecord(companyId, row, index)),
+      message: `${filtered.length} driver(s).`,
+      drivers: filtered.map((row, index) => mapDriverRecord(companyId, row, index)),
     });
   });
 
@@ -159,10 +175,15 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const companyId = c.req.param("companyId");
     const driverId = c.req.param("driverId");
+    const admin = getAdmin(c);
+
+    if (!adminCanAccessDriver(companyId, admin, driverId)) {
+      return c.json({ message: "Driver not found." }, 404);
+    }
 
     const row = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
          FROM drivers
          WHERE company_id = ? AND id = ?`,
       )
@@ -182,13 +203,18 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const companyId = c.req.param("companyId");
     const driverId = c.req.param("driverId");
+    const admin = getAdmin(c);
     const body: DriverPatchBody = await c.req
       .json<DriverPatchBody>()
       .catch((): DriverPatchBody => ({}));
 
+    if (!adminCanAccessDriver(companyId, admin, driverId)) {
+      return c.json({ message: "Driver not found." }, 404);
+    }
+
     const row = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
          FROM drivers
          WHERE company_id = ? AND id = ?`,
       )
@@ -201,6 +227,8 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     const displayName = body.name?.trim() || row.displayName || "Driver";
     const vehicleId =
       body.vehicleId !== undefined ? body.vehicleId.trim() : row.vehicleId || "";
+    const branchId =
+      body.branchId !== undefined ? resolveDriverBranchId(companyId, body.branchId) : row.branchId;
 
     let username = row.username;
     if (body.username?.trim()) {
@@ -223,20 +251,20 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     if (passwordHash) {
       db.prepare(
         `UPDATE drivers
-         SET display_name = ?, vehicle_id = ?, username = ?, password_hash = ?
+         SET display_name = ?, vehicle_id = ?, username = ?, password_hash = ?, branch_id = ?
          WHERE company_id = ? AND id = ?`,
-      ).run(displayName, vehicleId, username, passwordHash, companyId, driverId);
+      ).run(displayName, vehicleId, username, passwordHash, branchId, companyId, driverId);
     } else {
       db.prepare(
         `UPDATE drivers
-         SET display_name = ?, vehicle_id = ?, username = ?
+         SET display_name = ?, vehicle_id = ?, username = ?, branch_id = ?
          WHERE company_id = ? AND id = ?`,
-      ).run(displayName, vehicleId, username, companyId, driverId);
+      ).run(displayName, vehicleId, username, branchId, companyId, driverId);
     }
 
     const updated = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
          FROM drivers
          WHERE company_id = ? AND id = ?`,
       )
@@ -256,11 +284,16 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const companyId = c.req.param("companyId");
     const driverId = c.req.param("driverId");
+    const admin = getAdmin(c);
     const body = await c.req.json<{ status?: string }>().catch(() => ({ status: "" }));
+
+    if (!adminCanAccessDriver(companyId, admin, driverId)) {
+      return c.json({ message: "Driver not found." }, 404);
+    }
 
     const row = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
          FROM drivers
          WHERE company_id = ? AND id = ?`,
       )
@@ -282,6 +315,11 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const companyId = c.req.param("companyId");
     const driverId = c.req.param("driverId");
+    const admin = getAdmin(c);
+
+    if (!adminCanAccessDriver(companyId, admin, driverId)) {
+      return c.json({ message: "Driver not found." }, 404);
+    }
 
     const driver = db
       .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
@@ -306,6 +344,11 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const companyId = c.req.param("companyId");
     const driverId = c.req.param("driverId");
+    const admin = getAdmin(c);
+
+    if (!adminCanAccessDriver(companyId, admin, driverId)) {
+      return c.json({ message: "Driver not found." }, 404);
+    }
 
     const driver = db
       .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
