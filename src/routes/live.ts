@@ -115,7 +115,10 @@ function latestHeartbeats(companyId: string, maxAgeMs = 1000 * 60 * 15) {
        INNER JOIN (
          SELECT driver_id, MAX(created_at) AS max_created
          FROM heartbeats
-         WHERE company_id = ? AND created_at >= ?
+         WHERE company_id = ?
+           AND created_at >= ?
+           AND latitude IS NOT NULL
+           AND longitude IS NOT NULL
          GROUP BY driver_id
        ) latest ON latest.driver_id = h.driver_id AND latest.max_created = h.created_at
        WHERE h.company_id = ?`
@@ -123,9 +126,66 @@ function latestHeartbeats(companyId: string, maxAgeMs = 1000 * 60 * 15) {
     .all(companyId, cutoff, companyId) as Array<Record<string, unknown>>;
 }
 
+function latestProgressLocations(companyId: string, maxAgeMs = 1000 * 60 * 15) {
+  const cutoff = Date.now() - maxAgeMs;
+  return db
+    .prepare(
+      `SELECT p.company_id AS companyId, p.driver_id AS driverId, p.driver_device_id AS driverDeviceId,
+              p.vehicle_id AS vehicleId, p.route_run_id AS routeRunId, p.stop_id AS activeStopId,
+              p.latitude, p.longitude, NULL AS batteryLevelPercent,
+              'route-progress' AS networkStatus, '' AS appVersionName,
+              p.created_at AS createdAtMillis
+       FROM route_progress p
+       INNER JOIN (
+         SELECT driver_id, MAX(created_at) AS max_created
+         FROM route_progress
+         WHERE company_id = ?
+           AND created_at >= ?
+           AND latitude IS NOT NULL
+           AND longitude IS NOT NULL
+         GROUP BY driver_id
+       ) latest ON latest.driver_id = p.driver_id AND latest.max_created = p.created_at
+       WHERE p.company_id = ?`
+    )
+    .all(companyId, cutoff, companyId) as Array<Record<string, unknown>>;
+}
+
+function mergeLatestLocations(
+  heartbeats: Array<Record<string, unknown>>,
+  progress: Array<Record<string, unknown>>,
+) {
+  const byDriver = new Map<string, Record<string, unknown>>();
+
+  for (const row of progress) {
+    const driverId = String(row.driverId ?? "").trim();
+    if (!driverId) continue;
+    byDriver.set(driverId, row);
+  }
+
+  for (const row of heartbeats) {
+    const driverId = String(row.driverId ?? "").trim();
+    if (!driverId) continue;
+    const existing = byDriver.get(driverId);
+    const rowTime = Number(row.createdAtMillis ?? 0);
+    const existingTime = Number(existing?.createdAtMillis ?? 0);
+    if (!existing || rowTime >= existingTime) {
+      byDriver.set(driverId, row);
+    }
+  }
+
+  return [...byDriver.values()];
+}
+
+function latestDriverLocations(companyId: string, maxAgeMs = 1000 * 60 * 15) {
+  return mergeLatestLocations(
+    latestHeartbeats(companyId, maxAgeMs),
+    latestProgressLocations(companyId, maxAgeMs),
+  );
+}
+
 companyRoutes.get("/route47/companies/:companyId/admin/live-locations", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = latestHeartbeats(companyId);
+  const locations = latestDriverLocations(companyId);
 
   return c.json({
     message: `${locations.length} live location(s).`,
@@ -137,7 +197,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/live-locations", (c) => {
 
 companyRoutes.get("/route47/companies/:companyId/admin/live-updates", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = latestHeartbeats(companyId);
+  const locations = latestDriverLocations(companyId);
 
   return c.json({
     message: `${locations.length} live update(s).`,
@@ -148,7 +208,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/live-updates", (c) => {
 
 companyRoutes.get("/route47/companies/:companyId/devices/locations", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = latestHeartbeats(companyId);
+  const locations = latestDriverLocations(companyId);
 
   return c.json({
     message: `${locations.length} device location(s).`,

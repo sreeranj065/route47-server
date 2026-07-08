@@ -29,7 +29,7 @@ export function getAdminAllowedBranchIds(
   companyId: string,
   admin: AdminIdentity | null | undefined,
 ): string[] | null {
-  if (!admin || admin.id === "owner") return null;
+  if (!admin || admin.id === "owner" || admin.role === "owner") return null;
   return getAdminBranchIds(companyId, admin.id);
 }
 
