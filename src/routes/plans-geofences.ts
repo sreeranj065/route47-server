@@ -6,7 +6,6 @@ import { notifyRoutePlanPublished, notifyDriverRoutePlanSynced } from "../lib/ro
 import {
   canonicalRouteRunId,
   deleteDuplicateRoutePlansForDriverDay,
-  mergeRoutePlanStops,
 } from "../lib/route-plan-sync.js";
 
 const GEOFENCE_SELECT = `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
@@ -100,15 +99,7 @@ companyRoutes.post("/route47/companies/:companyId/admin-route-plans", async (c) 
       .get(companyId, routeRunId) as { driverId?: string; stopsJson?: string } | undefined;
 
     const incomingStops = Array.isArray(plan.stops) ? plan.stops : [];
-    let stops = incomingStops;
-    if (existing?.stopsJson) {
-      try {
-        const existingStops = JSON.parse(existing.stopsJson) as unknown[];
-        stops = mergeRoutePlanStops(existingStops, incomingStops, true);
-      } catch {
-        stops = incomingStops;
-      }
-    }
+    const stops = incomingStops;
 
     upsert.run(
       routeRunId,
