@@ -2,7 +2,12 @@ import crypto from "node:crypto";
 import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db, geofenceToJson, getCompany, routePlanToJson, type GeofenceRow, type RoutePlanRow } from "../db.js";
-import { notifyRoutePlanPublished } from "../lib/route-notification-hooks.js";
+import { notifyRoutePlanPublished, notifyDriverRoutePlanSynced } from "../lib/route-notification-hooks.js";
+import {
+  canonicalRouteRunId,
+  deleteDuplicateRoutePlansForDriverDay,
+  mergeRoutePlanStops,
+} from "../lib/route-plan-sync.js";
 
 const GEOFENCE_SELECT = `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
   driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
@@ -22,7 +27,7 @@ companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
        FROM route_plans
        WHERE company_id = ?
        ${driverId ? "AND (driver_id = ? OR driver_id = '')" : ""}
-       ORDER BY published_at DESC`
+       ORDER BY updated_at DESC`
     )
     .all(...(driverId ? [companyId, driverId] : [companyId])) as RoutePlanRow[];
 
@@ -79,28 +84,48 @@ companyRoutes.post("/route47/companies/:companyId/admin-route-plans", async (c) 
 
   for (const raw of plans) {
     const plan = raw as Record<string, unknown>;
-    const routeRunId = String(plan.routeRunId ?? plan.route_run_id ?? "").trim();
+    const driverId = String(plan.driverId ?? plan.driver_id ?? "").trim();
+    const routeDateIso = String(
+      plan.routeDateIso ?? plan.route_date_iso ?? new Date().toISOString().slice(0, 10),
+    ).trim();
+    const routeRunId = driverId
+      ? canonicalRouteRunId(driverId, routeDateIso)
+      : String(plan.routeRunId ?? plan.route_run_id ?? "").trim();
     if (!routeRunId) continue;
 
     const existing = db
-      .prepare(`SELECT driver_id AS driverId, stops_json AS stopsJson FROM route_plans WHERE company_id = ? AND route_run_id = ?`)
+      .prepare(
+        `SELECT driver_id AS driverId, stops_json AS stopsJson FROM route_plans WHERE company_id = ? AND route_run_id = ?`,
+      )
       .get(companyId, routeRunId) as { driverId?: string; stopsJson?: string } | undefined;
 
-    const driverId = String(plan.driverId ?? plan.driver_id ?? "");
-    const stops = Array.isArray(plan.stops) ? plan.stops : [];
+    const incomingStops = Array.isArray(plan.stops) ? plan.stops : [];
+    let stops = incomingStops;
+    if (existing?.stopsJson) {
+      try {
+        const existingStops = JSON.parse(existing.stopsJson) as unknown[];
+        stops = mergeRoutePlanStops(existingStops, incomingStops, true);
+      } catch {
+        stops = incomingStops;
+      }
+    }
 
     upsert.run(
       routeRunId,
       companyId,
       driverId,
       String(plan.vehicleId ?? plan.vehicle_id ?? ""),
-      String(plan.routeDateIso ?? plan.route_date_iso ?? new Date().toISOString().slice(0, 10)),
+      routeDateIso,
       String(plan.status ?? "published"),
       JSON.stringify(stops),
       now,
       now
     );
     published.push(routeRunId);
+
+    if (driverId) {
+      deleteDuplicateRoutePlansForDriverDay(companyId, driverId, routeDateIso, routeRunId);
+    }
 
     notifyRoutePlanPublished({
       companyId,
@@ -460,14 +485,22 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
     stops?: unknown[];
   }>();
 
-  const routeRunId = String(body.routeRunId ?? "").trim();
+  const driverId = String(body.driverId ?? c.get("driverId") ?? "").trim();
+  const routeDateIso = String(body.routeDateIso ?? new Date().toISOString().slice(0, 10)).trim();
+  const routeRunId = driverId
+    ? canonicalRouteRunId(driverId, routeDateIso)
+    : String(body.routeRunId ?? "").trim();
   if (!routeRunId) {
-    return c.json({ message: "routeRunId is required." }, 400);
+    return c.json({ message: "routeRunId or driverId is required." }, 400);
   }
 
-  const driverId = String(body.driverId ?? c.get("driverId") ?? "").trim();
   const vehicleId = String(body.vehicleId ?? c.get("vehicleId") ?? "").trim();
+  const stops = Array.isArray(body.stops) ? body.stops : [];
   const now = Date.now();
+
+  const existing = db
+    .prepare(`SELECT stops_json AS stopsJson FROM route_plans WHERE company_id = ? AND route_run_id = ?`)
+    .get(companyId, routeRunId) as { stopsJson?: string } | undefined;
 
   db.prepare(
     `INSERT INTO route_plans (
@@ -485,16 +518,28 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
     companyId,
     driverId,
     vehicleId,
-    String(body.routeDateIso ?? new Date().toISOString().slice(0, 10)),
+    routeDateIso,
     String(body.status ?? "in_progress"),
-    JSON.stringify(body.stops ?? []),
+    JSON.stringify(stops),
     now,
     now
   );
 
+  if (driverId) {
+    deleteDuplicateRoutePlansForDriverDay(companyId, driverId, routeDateIso, routeRunId);
+  }
+
+  notifyDriverRoutePlanSynced({
+    companyId,
+    routeRunId,
+    driverId,
+    stopCount: stops.length,
+    isNew: !existing,
+  });
+
   return c.json({
     message: "Driver route plan synced.",
     routeRunId,
-    stopCount: Array.isArray(body.stops) ? body.stops.length : 0,
+    stopCount: stops.length,
   });
 });

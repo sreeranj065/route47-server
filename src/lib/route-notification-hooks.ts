@@ -10,6 +10,28 @@ function driverDisplayName(companyId: string, driverId: string): string {
   return row?.displayName?.trim() || row?.username?.trim() || driverId;
 }
 
+export function notifyDriverRoutePlanSynced(input: {
+  companyId: string;
+  routeRunId: string;
+  driverId: string;
+  stopCount: number;
+  isNew: boolean;
+}) {
+  const { companyId, routeRunId, driverId, stopCount } = input;
+  if (!driverId) return;
+
+  const driverName = driverDisplayName(companyId, driverId);
+  const stopLabel = `${stopCount} stop${stopCount === 1 ? "" : "s"}`;
+
+  notifyAllAdmins(
+    companyId,
+    NOTIFICATION_TYPES.STOPS_CHANGED,
+    input.isNew ? "Driver added stops" : "Driver updated current list",
+    `${driverName} ${input.isNew ? "added" : "updated"} their current list (${stopLabel}).`,
+    { routeRunId, driverId, stopCount: String(stopCount), source: "driver" },
+  );
+}
+
 export function notifyRoutePlanPublished(input: {
   companyId: string;
   routeRunId: string;

@@ -1,5 +1,71 @@
 import { db, type RoutePlanRow } from "../db.js";
 
+/** One route plan row per driver per calendar day — matches the driver app format. */
+export function canonicalRouteRunId(driverId: string, routeDateIso?: string): string {
+  const safeDriver = driverId.trim() || "driver";
+  const date = (routeDateIso ?? new Date().toISOString().slice(0, 10)).trim();
+  return `run-${safeDriver}-${date}`;
+}
+
+export function mergeRoutePlanStops(
+  existing: unknown[],
+  incoming: unknown[],
+  incomingWinsOnConflict: boolean,
+): unknown[] {
+  const byId = new Map<string, Record<string, unknown>>();
+
+  for (const stop of existing) {
+    const record = stop as Record<string, unknown>;
+    const id = String(record.stopId ?? "").trim();
+    if (id) byId.set(id, record);
+  }
+
+  for (const stop of incoming) {
+    const record = stop as Record<string, unknown>;
+    const id = String(record.stopId ?? "").trim();
+    if (!id) continue;
+    if (!byId.has(id) || incomingWinsOnConflict) {
+      byId.set(id, record);
+    }
+  }
+
+  const result: unknown[] = [];
+  const seen = new Set<string>();
+
+  for (const stop of existing) {
+    const id = String((stop as Record<string, unknown>).stopId ?? "").trim();
+    if (id && byId.has(id) && !seen.has(id)) {
+      result.push(byId.get(id));
+      seen.add(id);
+    }
+  }
+
+  for (const stop of incoming) {
+    const id = String((stop as Record<string, unknown>).stopId ?? "").trim();
+    if (id && !seen.has(id)) {
+      result.push(byId.get(id) ?? stop);
+      seen.add(id);
+    }
+  }
+
+  return result;
+}
+
+export function deleteDuplicateRoutePlansForDriverDay(
+  companyId: string,
+  driverId: string,
+  routeDateIso: string,
+  keepRouteRunId: string,
+): void {
+  const safeDriver = driverId.trim();
+  if (!safeDriver) return;
+
+  db.prepare(
+    `DELETE FROM route_plans
+     WHERE company_id = ? AND driver_id = ? AND route_date_iso = ? AND route_run_id != ?`,
+  ).run(companyId, safeDriver, routeDateIso, keepRouteRunId);
+}
+
 export function normalizeStopStatus(raw: string | undefined): string {
   const value = (raw ?? "").trim();
   if (!value) return "";
@@ -32,6 +98,18 @@ export function readStopStatusFromJson(stop: {
 
 export function latestRoutePlan(companyId: string, driverId: string): RoutePlanRow | undefined {
   const today = new Date().toISOString().slice(0, 10);
+  const canonicalId = canonicalRouteRunId(driverId, today);
+
+  const canonicalPlan = db
+    .prepare(
+      `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+       FROM route_plans
+       WHERE company_id = ? AND route_run_id = ?`,
+    )
+    .get(companyId, canonicalId) as RoutePlanRow | undefined;
+
+  if (canonicalPlan) return canonicalPlan;
+
   return db
     .prepare(
       `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
