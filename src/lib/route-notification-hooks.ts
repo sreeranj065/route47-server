@@ -212,3 +212,37 @@ export function notifySilentSync(companyId: string, driverId: string, routeRunId
     { silent: true },
   );
 }
+
+/** Nudge fleet drivers to refresh geofences from admin/snapshot after zone changes. */
+export function notifyGeofencesChanged(companyId: string, driverDeviceId?: string) {
+  const safeDeviceId = driverDeviceId?.trim() ?? "";
+
+  if (safeDeviceId) {
+    const row = db
+      .prepare(
+        `SELECT driver_id AS driverId FROM device_tokens
+         WHERE company_id = ? AND driver_device_id = ?
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(companyId, safeDeviceId) as { driverId?: string } | undefined;
+
+    const driverId = row?.driverId?.trim() ?? "";
+    if (driverId) {
+      notifySilentSync(companyId, driverId, "geofences");
+      return;
+    }
+  }
+
+  const drivers = db
+    .prepare(
+      `SELECT DISTINCT driver_id AS driverId FROM device_tokens
+       WHERE company_id = ? AND driver_id != ''`,
+    )
+    .all(companyId) as Array<{ driverId: string }>;
+
+  for (const entry of drivers) {
+    const driverId = entry.driverId?.trim();
+    if (!driverId) continue;
+    notifySilentSync(companyId, driverId, "geofences");
+  }
+}

@@ -9,6 +9,7 @@ import "./routes/admin-fleet.js";
 import "./routes/business-search.js";
 import "./routes/admin-team.js";
 import "./routes/notifications.js";
+import "./routes/messages.js";
 import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";

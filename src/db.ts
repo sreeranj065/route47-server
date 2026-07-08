@@ -303,6 +303,37 @@ function ensureTeamAndNotificationTables() {
 
 ensureTeamAndNotificationTables();
 
+function ensureMessageTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      company_id TEXT NOT NULL,
+      driver_id TEXT NOT NULL,
+      last_message_at INTEGER NOT NULL,
+      PRIMARY KEY (company_id, driver_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_company_last_message
+      ON conversations (company_id, last_message_at DESC);
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      conversation_driver_id TEXT NOT NULL,
+      sender_type TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      attachment_url TEXT NOT NULL DEFAULT '',
+      mime_type TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      read_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation
+      ON messages (company_id, conversation_driver_id, created_at ASC);
+  `);
+}
+
+ensureMessageTables();
+
 export type GeofenceRow = {
   id: string;
   company_id: string;

@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db, geofenceToJson, getCompany, routePlanToJson, type GeofenceRow, type RoutePlanRow } from "../db.js";
-import { notifyRoutePlanPublished, notifyDriverRoutePlanSynced } from "../lib/route-notification-hooks.js";
+import {
+  notifyRoutePlanPublished,
+  notifyDriverRoutePlanSynced,
+  notifyGeofencesChanged,
+} from "../lib/route-notification-hooks.js";
 import {
   canonicalRouteRunId,
   deleteDuplicateRoutePlansForDriverDay,
@@ -194,6 +198,7 @@ companyRoutes.patch("/route47/companies/:companyId/admin/company", async (c) => 
 companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
   const companyId = c.req.param("companyId");
   const company = getCompany(companyId);
+  const driverDeviceId = String(c.get("driverDeviceId") ?? "").trim();
 
   const routePlans = (
     db
@@ -226,6 +231,17 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
     };
   });
 
+  const rejectedGeofenceIds: string[] = driverDeviceId
+    ? (
+        db
+          .prepare(
+            `SELECT id FROM geofences
+             WHERE company_id = ? AND driver_device_id = ? AND approval_status = 'rejected'`,
+          )
+          .all(companyId, driverDeviceId) as Array<{ id: string }>
+      ).map((row) => row.id)
+    : [];
+
   return c.json({
     message: "Admin snapshot ready.",
     snapshot: {
@@ -234,6 +250,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       serverTimeMillis: Date.now(),
       adminRoutePlans: routePlans,
       geofences,
+      rejectedGeofenceIds,
     },
   });
 });
@@ -312,6 +329,8 @@ companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) =>
     now
   );
 
+  notifyGeofencesChanged(companyId);
+
   return c.json({ message: "Geofence saved.", id });
 });
 
@@ -373,6 +392,8 @@ companyRoutes.patch("/route47/companies/:companyId/admin/geofences/:geofenceId",
     geofenceId
   );
 
+  notifyGeofencesChanged(companyId, row.driver_device_id);
+
   return c.json({
     message: `Geofence ${body.approvalStatus ? `${body.approvalStatus}.` : "updated."}`,
     id: geofenceId,
@@ -388,13 +409,17 @@ companyRoutes.delete("/route47/companies/:companyId/admin/geofences/:geofenceId"
   const companyId = c.req.param("companyId");
   const geofenceId = c.req.param("geofenceId");
 
-  const result = db
-    .prepare(`DELETE FROM geofences WHERE company_id = ? AND id = ?`)
-    .run(companyId, geofenceId);
+  const existingRow = db
+    .prepare(`${GEOFENCE_SELECT} WHERE company_id = ? AND id = ?`)
+    .get(companyId, geofenceId) as GeofenceRow | undefined;
 
-  if (result.changes === 0) {
+  if (!existingRow) {
     return c.json({ message: "Geofence not found." }, 404);
   }
+
+  db.prepare(`DELETE FROM geofences WHERE company_id = ? AND id = ?`).run(companyId, geofenceId);
+
+  notifyGeofencesChanged(companyId, existingRow.driver_device_id);
 
   return c.json({ message: "Geofence deleted.", id: geofenceId });
 });
@@ -406,6 +431,7 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
     driverDeviceId?: string;
     vehicleId?: string;
     syncedAtMillis?: number;
+    deletedGeofenceIds?: string[];
     geofences?: Array<{
       id?: string;
       name?: string;
@@ -420,7 +446,19 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
 
   const driverDeviceId = body.driverDeviceId ?? c.get("driverDeviceId");
   const incoming = body.geofences ?? [];
+  const deletedIds = (body.deletedGeofenceIds ?? [])
+    .map((id) => String(id ?? "").trim())
+    .filter(Boolean);
   const now = body.syncedAtMillis ?? Date.now();
+
+  if (deletedIds.length > 0 && driverDeviceId) {
+    const remove = db.prepare(
+      `DELETE FROM geofences WHERE company_id = ? AND id = ? AND driver_device_id = ?`,
+    );
+    for (const id of deletedIds) {
+      remove.run(companyId, id, driverDeviceId);
+    }
+  }
 
   const upsert = db.prepare(
     `INSERT INTO geofences (
@@ -462,6 +500,7 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
 
   return c.json({
     message: `${incoming.length} geofence(s) synced for admin approval.`,
+    deletedCount: deletedIds.length,
   });
 });
 
