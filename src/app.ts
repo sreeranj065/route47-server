@@ -10,9 +10,11 @@ import "./routes/business-search.js";
 import "./routes/admin-team.js";
 import "./routes/notifications.js";
 import "./routes/messages.js";
+import "./routes/branch-sharing.js";
 import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";
+import { migrateMessageAttachmentPaths } from "./message-attachment-migration.js";
 
 try {
   const migratedProofs = migrateFlatProofPaths();
@@ -21,6 +23,15 @@ try {
   }
 } catch (error) {
   console.warn("Proof path migration skipped:", error);
+}
+
+try {
+  const migratedAttachments = migrateMessageAttachmentPaths();
+  if (migratedAttachments > 0) {
+    console.log(`Migrated ${migratedAttachments} message attachment(s) into branch folders.`);
+  }
+} catch (error) {
+  console.warn("Message attachment migration skipped:", error);
 }
 
 export const app = new Hono();

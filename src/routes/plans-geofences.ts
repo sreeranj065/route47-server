@@ -17,9 +17,55 @@ import {
   driverBranchFilterSql,
   getAdminAllowedBranchIds,
   resolveDriverBranchId,
+  sharedResourceIds,
 } from "../lib/branch-filter.js";
 import { getDriverBranchId } from "../branch-storage.js";
 import { getAdminBranchIds } from "../lib/admin-auth.js";
+
+/** Route plans explicitly shared to any of the given branches, excluding ones already loaded. */
+function loadSharedRoutePlans(
+  companyId: string,
+  targetBranchIds: string[],
+  excludeRunIds: Set<string>,
+): RoutePlanRow[] {
+  const ids = sharedResourceIds(companyId, "route", targetBranchIds).filter(
+    (id) => !excludeRunIds.has(id),
+  );
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+  return db
+    .prepare(
+      `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+       FROM route_plans
+       WHERE company_id = ? AND route_run_id IN (${placeholders})`,
+    )
+    .all(companyId, ...ids) as RoutePlanRow[];
+}
+
+/** Geofences explicitly shared to any of the given branches, excluding ones already loaded. */
+function loadSharedGeofences(
+  companyId: string,
+  targetBranchIds: string[],
+  excludeIds: Set<string>,
+  approvalStatus?: string,
+): GeofenceRow[] {
+  const ids = sharedResourceIds(companyId, "geofence", targetBranchIds).filter(
+    (id) => !excludeIds.has(id),
+  );
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+  return db
+    .prepare(
+      `${GEOFENCE_SELECT}
+       WHERE company_id = ? AND id IN (${placeholders})
+       ${approvalStatus ? "AND approval_status = ?" : ""}`,
+    )
+    .all(
+      ...(approvalStatus
+        ? [companyId, ...ids, approvalStatus]
+        : [companyId, ...ids]),
+    ) as GeofenceRow[];
+}
 
 const GEOFENCE_SELECT = `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
   driver_device_id, stop_id, route_id, last_triggered_at_millis, branch_id, created_at, updated_at
@@ -32,7 +78,8 @@ function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js")
 companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
   const companyId = c.req.param("companyId");
   const driverId = c.req.query("driverId")?.trim();
-  const branchFilter = driverBranchFilterSql(companyId, c.get("admin"));
+  const admin = c.get("admin");
+  const branchFilter = driverBranchFilterSql(companyId, admin);
 
   const rows = db
     .prepare(
@@ -44,6 +91,18 @@ companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
        ORDER BY updated_at DESC`
     )
     .all(...(driverId ? [companyId, driverId, ...branchFilter.params] : [companyId, ...branchFilter.params])) as RoutePlanRow[];
+
+  // Branch-restricted admins also see routes explicitly shared to their branches.
+  const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
+  if (!driverId && allowedBranches !== null) {
+    rows.push(
+      ...loadSharedRoutePlans(
+        companyId,
+        allowedBranches,
+        new Set(rows.map((row) => row.route_run_id)),
+      ),
+    );
+  }
 
   const adminRoutePlans = rows.map(routePlanToJson);
 
@@ -215,22 +274,34 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
   const routeBranchFilter = driverBranchFilterSql(companyId, admin);
   const geofenceBranchFilter = branchColumnFilterSql(companyId, admin);
 
-  const routePlans = (
-    db
-      .prepare(
-        `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
-         FROM route_plans
-         WHERE company_id = ?
-         ${sessionDriverId ? "AND driver_id = ?" : ""}
-         ${routeBranchFilter.clause}
-         ORDER BY published_at DESC`
-      )
-      .all(
-        ...(sessionDriverId
-          ? [companyId, sessionDriverId, ...routeBranchFilter.params]
-          : [companyId, ...routeBranchFilter.params]),
-      ) as RoutePlanRow[]
-  ).map(routePlanToJson);
+  const routePlanRows = db
+    .prepare(
+      `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+       FROM route_plans
+       WHERE company_id = ?
+       ${sessionDriverId ? "AND driver_id = ?" : ""}
+       ${routeBranchFilter.clause}
+       ORDER BY published_at DESC`
+    )
+    .all(
+      ...(sessionDriverId
+        ? [companyId, sessionDriverId, ...routeBranchFilter.params]
+        : [companyId, ...routeBranchFilter.params]),
+    ) as RoutePlanRow[];
+
+  // Branch-restricted admins also see routes explicitly shared to their branches.
+  const adminAllowedBranches = getAdminAllowedBranchIds(companyId, admin);
+  if (!sessionDriverId && adminAllowedBranches !== null) {
+    routePlanRows.push(
+      ...loadSharedRoutePlans(
+        companyId,
+        adminAllowedBranches,
+        new Set(routePlanRows.map((row) => row.route_run_id)),
+      ),
+    );
+  }
+
+  const routePlans = routePlanRows.map(routePlanToJson);
 
   const driverBranchId = sessionDriverId ? getDriverBranchId(companyId, sessionDriverId) : "";
   const geofenceConditions = [
@@ -248,15 +319,30 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
     geofenceParams.push(...geofenceBranchFilter.params);
   }
 
-  const geofences = (
-    db
-      .prepare(
-        `${GEOFENCE_SELECT}
-         WHERE ${geofenceConditions.join(" ")}
-         ORDER BY updated_at DESC`,
-      )
-      .all(...geofenceParams) as GeofenceRow[]
-  ).map((row) => {
+  const geofenceRows = db
+    .prepare(
+      `${GEOFENCE_SELECT}
+       WHERE ${geofenceConditions.join(" ")}
+       ORDER BY updated_at DESC`,
+    )
+    .all(...geofenceParams) as GeofenceRow[];
+
+  // Include approved geofences explicitly shared to the caller's branch(es).
+  const geofenceShareTargets = sessionDriverId
+    ? [driverBranchId].filter(Boolean)
+    : adminAllowedBranches ?? [];
+  if (geofenceShareTargets.length > 0) {
+    geofenceRows.push(
+      ...loadSharedGeofences(
+        companyId,
+        geofenceShareTargets,
+        new Set(geofenceRows.map((row) => row.id)),
+        "approved",
+      ),
+    );
+  }
+
+  const geofences = geofenceRows.map((row) => {
     const json = geofenceToJson(row);
     return {
       id: json.id,
@@ -301,7 +387,8 @@ companyRoutes.get("/route47/companies/:companyId/admin/geofences", (c) => {
 
   const companyId = c.req.param("companyId");
   const status = c.req.query("approvalStatus")?.trim();
-  const branchFilter = branchColumnFilterSql(companyId, c.get("admin"));
+  const admin = c.get("admin");
+  const branchFilter = branchColumnFilterSql(companyId, admin);
 
   const rows = db
     .prepare(
@@ -312,6 +399,19 @@ companyRoutes.get("/route47/companies/:companyId/admin/geofences", (c) => {
        ORDER BY updated_at DESC`
     )
     .all(...(status ? [companyId, status, ...branchFilter.params] : [companyId, ...branchFilter.params])) as GeofenceRow[];
+
+  // Branch-restricted admins also see geofences explicitly shared to their branches.
+  const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
+  if (allowedBranches !== null) {
+    rows.push(
+      ...loadSharedGeofences(
+        companyId,
+        allowedBranches,
+        new Set(rows.map((row) => row.id)),
+        status || undefined,
+      ),
+    );
+  }
 
   return c.json({
     message: `${rows.length} geofence(s).`,

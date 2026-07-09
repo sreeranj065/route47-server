@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { db, getCompany, MESSAGE_ATTACHMENTS_DIR } from "../db.js";
-import { adminCanAccessDriver, driverBranchFilterSql } from "../lib/branch-filter.js";
+import { db, getCompany } from "../db.js";
+import { ensureBranchOperationalLayout, getDriverBranchId } from "../branch-storage.js";
+import {
+  adminCanAccessDriver,
+  defaultBranchId,
+  driverBranchFilterSql,
+  getAdminAllowedBranchIds,
+} from "../lib/branch-filter.js";
 import { NOTIFICATION_TYPES } from "../lib/notification-types.js";
 import { notifyAllAdmins, notifyDriver } from "../lib/notification-service.js";
 import { hasAdminAccess } from "../lib/route-admin.js";
@@ -568,7 +574,20 @@ companyRoutes.post("/route47/companies/:companyId/messages/attachments", async (
 
   const attachmentId = rid("msgatt");
   const safeName = (file.name || "attachment.bin").replace(/[^\w.\- ]+/g, "_").slice(0, 120);
-  const storedDir = path.join(MESSAGE_ATTACHMENTS_DIR, companyId);
+
+  // Attachments live in the owning branch's Messages/ folder. Driver uploads go
+  // to the driver's branch; admin uploads go to the admin's first assigned
+  // branch (or the company default when unrestricted).
+  let branchId: string;
+  if (!isAdmin && driverId) {
+    branchId = getDriverBranchId(companyId, driverId);
+  } else {
+    const admin = c.get("admin");
+    const allowed = admin ? getAdminAllowedBranchIds(companyId, admin) : null;
+    branchId = allowed && allowed.length > 0 ? allowed[0] : defaultBranchId(companyId);
+  }
+
+  const storedDir = path.join(ensureBranchOperationalLayout(companyId, branchId), "Messages");
   const storedPath = path.join(storedDir, `${attachmentId}-${safeName}`);
 
   fs.mkdirSync(storedDir, { recursive: true });

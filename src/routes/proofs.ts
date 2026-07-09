@@ -8,6 +8,7 @@ import {
   adminCanAccessDriver,
   driverBranchFilterSql,
   getAdminAllowedBranchIds,
+  sharedResourceIds,
 } from "../lib/branch-filter.js";
 import { buildProofFolderName, buildStoredProofPath } from "../proof-storage.js";
 
@@ -134,10 +135,21 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
   if (sessionDriverId && !admin) {
     conditions.push("driver_id = ?");
     params.push(sessionDriverId);
-  } else if (admin && getAdminAllowedBranchIds(companyId, admin) !== null) {
-    const branchFilter = driverBranchFilterSql(companyId, admin);
-    conditions.push(`1=1${branchFilter.clause}`);
-    params.push(...branchFilter.params);
+  } else if (admin) {
+    const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
+    if (allowedBranches !== null) {
+      const branchFilter = driverBranchFilterSql(companyId, admin);
+      // Documents explicitly shared to this admin's branches stay visible.
+      const sharedProofIds = sharedResourceIds(companyId, "document", allowedBranches);
+      if (sharedProofIds.length > 0) {
+        const placeholders = sharedProofIds.map(() => "?").join(", ");
+        conditions.push(`(1=1${branchFilter.clause} OR proof_id IN (${placeholders}))`);
+        params.push(...branchFilter.params, ...sharedProofIds);
+      } else {
+        conditions.push(`1=1${branchFilter.clause}`);
+        params.push(...branchFilter.params);
+      }
+    }
   }
 
   if (routeRunId) {
@@ -376,7 +388,14 @@ companyRoutes.get("/route47/companies/:companyId/proofs/:proofId/file", (c) => {
     return c.json({ message: "Proof file not found." }, 404);
   }
   if (!sessionDriverId && !adminCanAccessDriver(companyId, c.get("admin"), row.driverId)) {
-    return c.json({ message: "Proof file not found." }, 404);
+    // A document explicitly shared to one of the admin's branches stays downloadable.
+    const allowedBranches = getAdminAllowedBranchIds(companyId, c.get("admin"));
+    const shared =
+      allowedBranches !== null &&
+      sharedResourceIds(companyId, "document", allowedBranches).includes(proofId);
+    if (!shared) {
+      return c.json({ message: "Proof file not found." }, 404);
+    }
   }
 
   const data = fs.readFileSync(row.filePath);

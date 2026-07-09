@@ -120,6 +120,23 @@ export function branchColumnFilterSql(
   };
 }
 
+/** IDs of a resource type explicitly shared TO any of the given branches. */
+export function sharedResourceIds(
+  companyId: string,
+  resourceType: string,
+  targetBranchIds: string[],
+): string[] {
+  if (targetBranchIds.length === 0) return [];
+  const placeholders = targetBranchIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT resource_id AS resourceId FROM branch_shared_resources
+       WHERE company_id = ? AND resource_type = ? AND target_branch_id IN (${placeholders})`,
+    )
+    .all(companyId, resourceType, ...targetBranchIds) as Array<{ resourceId: string }>;
+  return rows.map((row) => row.resourceId);
+}
+
 export function filterRowsByAccessibleDrivers<T extends { driverId?: unknown }>(
   rows: T[],
   companyId: string,
