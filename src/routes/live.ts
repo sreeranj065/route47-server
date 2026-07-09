@@ -3,6 +3,9 @@ import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db, dailyReportToJson, type DailyReportRow } from "../db.js";
 import { applyStopProgressToLatestPlan } from "../lib/route-plan-sync.js";
+import {
+  filterRowsByAccessibleDrivers,
+} from "../lib/branch-filter.js";
 
 function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
   return hasAdminAccess(c);
@@ -21,6 +24,7 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
     longitude?: number;
     batteryLevelPercent?: number;
     networkStatus?: string;
+    speedKmh?: number;
     appVersionName?: string;
     appBuildType?: string;
     createdAtMillis?: number;
@@ -31,9 +35,9 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
   db.prepare(
     `INSERT INTO heartbeats (
       company_id, driver_id, driver_device_id, vehicle_id, route_run_id, active_stop_id,
-      latitude, longitude, battery_level_percent, network_status, app_version_name,
+      latitude, longitude, battery_level_percent, network_status, speed_kmh, app_version_name,
       app_build_type, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     companyId,
     body.driverId ?? c.get("driverId"),
@@ -45,6 +49,7 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
     body.longitude ?? null,
     body.batteryLevelPercent ?? null,
     body.networkStatus ?? "unknown",
+    body.speedKmh ?? null,
     body.appVersionName ?? "",
     body.appBuildType ?? "",
     createdAt
@@ -109,7 +114,7 @@ function latestHeartbeats(companyId: string, maxAgeMs = 1000 * 60 * 15) {
       `SELECT h.company_id AS companyId, h.driver_id AS driverId, h.driver_device_id AS driverDeviceId,
               h.vehicle_id AS vehicleId, h.route_run_id AS routeRunId, h.active_stop_id AS activeStopId,
               h.latitude, h.longitude, h.battery_level_percent AS batteryLevelPercent,
-              h.network_status AS networkStatus, h.app_version_name AS appVersionName,
+              h.speed_kmh AS speedKmh, h.network_status AS networkStatus, h.app_version_name AS appVersionName,
               h.created_at AS createdAtMillis
        FROM heartbeats h
        INNER JOIN (
@@ -183,9 +188,18 @@ function latestDriverLocations(companyId: string, maxAgeMs = 1000 * 60 * 15) {
   );
 }
 
+function scopedDriverLocations(
+  companyId: string,
+  admin: import("../lib/admin-auth.js").AdminIdentity | undefined,
+  maxAgeMs = 1000 * 60 * 15,
+) {
+  const locations = latestDriverLocations(companyId, maxAgeMs);
+  return filterRowsByAccessibleDrivers(locations, companyId, admin);
+}
+
 companyRoutes.get("/route47/companies/:companyId/admin/live-locations", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = latestDriverLocations(companyId);
+  const locations = scopedDriverLocations(companyId, c.get("admin"));
 
   return c.json({
     message: `${locations.length} live location(s).`,
@@ -197,7 +211,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/live-locations", (c) => {
 
 companyRoutes.get("/route47/companies/:companyId/admin/live-updates", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = latestDriverLocations(companyId);
+  const locations = scopedDriverLocations(companyId, c.get("admin"));
 
   return c.json({
     message: `${locations.length} live update(s).`,
@@ -208,7 +222,13 @@ companyRoutes.get("/route47/companies/:companyId/admin/live-updates", (c) => {
 
 companyRoutes.get("/route47/companies/:companyId/devices/locations", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = latestDriverLocations(companyId);
+  const sessionDriverId = c.get("driverId")?.trim() ?? "";
+  let locations = latestDriverLocations(companyId);
+  if (sessionDriverId) {
+    locations = locations.filter((row) => String(row.driverId ?? "").trim() === sessionDriverId);
+  } else {
+    locations = scopedDriverLocations(companyId, c.get("admin"));
+  }
 
   return c.json({
     message: `${locations.length} device location(s).`,

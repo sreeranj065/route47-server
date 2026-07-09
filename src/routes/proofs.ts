@@ -2,7 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
-import { db, PROOFS_DIR } from "../db.js";
+import { db } from "../db.js";
+import { getDriverBranchId } from "../branch-storage.js";
+import {
+  adminCanAccessDriver,
+  driverBranchFilterSql,
+  getAdminAllowedBranchIds,
+} from "../lib/branch-filter.js";
 import { buildProofFolderName, buildStoredProofPath } from "../proof-storage.js";
 
 function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
@@ -42,8 +48,11 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     return c.json({ message: "Proof file is required." }, 400);
   }
 
+  const branchId = getDriverBranchId(companyId, driverId);
+
   const { storedPath, storedName, relativePath } = buildStoredProofPath({
     companyId,
+    branchId,
     proofId,
     proofType,
     routeRunId,
@@ -58,8 +67,8 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   db.prepare(
     `INSERT INTO proofs (
       proof_id, company_id, driver_id, driver_device_id, vehicle_id, route_run_id, stop_id,
-      proof_type, customer_name, address, file_name, file_path, mime_type, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      proof_type, customer_name, address, file_name, file_path, mime_type, created_at, branch_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(proof_id) DO UPDATE SET
       driver_id = excluded.driver_id,
       route_run_id = excluded.route_run_id,
@@ -70,7 +79,8 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
       file_name = excluded.file_name,
       file_path = excluded.file_path,
       mime_type = excluded.mime_type,
-      created_at = excluded.created_at`
+      created_at = excluded.created_at,
+      branch_id = excluded.branch_id`
   ).run(
     proofId,
     companyId,
@@ -85,7 +95,8 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     storedName,
     storedPath,
     file.type || "application/octet-stream",
-    createdAtMillis
+    createdAtMillis,
+    branchId
   );
 
   const { notifyProofUploaded } = await import("../lib/route-notification-hooks.js");
@@ -108,6 +119,8 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
 
 companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
   const companyId = c.req.param("companyId");
+  const admin = c.get("admin");
+  const sessionDriverId = c.get("driverId")?.trim() ?? "";
   const routeRunId = c.req.query("routeRunId")?.trim();
   const stopId = c.req.query("stopId")?.trim();
   const driverId = c.req.query("driverId")?.trim();
@@ -117,6 +130,15 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
 
   const conditions = ["company_id = ?"];
   const params: Array<string | number> = [companyId];
+
+  if (sessionDriverId && !admin) {
+    conditions.push("driver_id = ?");
+    params.push(sessionDriverId);
+  } else if (admin && getAdminAllowedBranchIds(companyId, admin) !== null) {
+    const branchFilter = driverBranchFilterSql(companyId, admin);
+    conditions.push(`1=1${branchFilter.clause}`);
+    params.push(...branchFilter.params);
+  }
 
   if (routeRunId) {
     conditions.push("route_run_id = ?");
@@ -179,13 +201,14 @@ type ProofRow = {
   address: string;
   file_name: string;
   file_path: string;
+  branch_id?: string;
 };
 
 function loadProofRow(companyId: string, proofId: string): ProofRow | undefined {
   return db
     .prepare(
       `SELECT proof_id, company_id, driver_id, route_run_id, stop_id, proof_type,
-              customer_name, address, file_name, file_path
+              customer_name, address, file_name, file_path, branch_id
        FROM proofs WHERE company_id = ? AND proof_id = ?`,
     )
     .get(companyId, proofId) as ProofRow | undefined;
@@ -195,9 +218,11 @@ function relocateProofFile(row: ProofRow, next: {
   routeRunId: string;
   proofType: string;
   fileName: string;
+  branchId: string;
 }): { storedPath: string; storedName: string } {
   const { storedPath, storedName } = buildStoredProofPath({
     companyId: row.company_id,
+    branchId: next.branchId,
     proofId: row.proof_id,
     proofType: next.proofType,
     routeRunId: next.routeRunId,
@@ -242,7 +267,12 @@ companyRoutes.patch("/route47/companies/:companyId/proofs/:proofId", async (c) =
   if (!row) {
     return c.json({ message: "Proof not found." }, 404);
   }
+  if (!adminCanAccessDriver(companyId, c.get("admin"), row.driver_id)) {
+    return c.json({ message: "Proof not found." }, 404);
+  }
 
+  const nextDriverId = body.driverId ?? row.driver_id;
+  const branchId = getDriverBranchId(companyId, nextDriverId);
   const nextRouteRunId = body.routeRunId ?? row.route_run_id;
   const nextProofType = body.proofType ?? row.proof_type;
   const nextFileName = body.fileName ?? row.file_name;
@@ -250,6 +280,7 @@ companyRoutes.patch("/route47/companies/:companyId/proofs/:proofId", async (c) =
     routeRunId: nextRouteRunId,
     proofType: nextProofType,
     fileName: nextFileName,
+    branchId,
   });
 
   db.prepare(
@@ -261,10 +292,11 @@ companyRoutes.patch("/route47/companies/:companyId/proofs/:proofId", async (c) =
       customer_name = ?,
       address = ?,
       file_name = ?,
-      file_path = ?
+      file_path = ?,
+      branch_id = ?
      WHERE company_id = ? AND proof_id = ?`,
   ).run(
-    body.driverId ?? row.driver_id,
+    nextDriverId,
     nextRouteRunId,
     body.stopId ?? row.stop_id,
     nextProofType,
@@ -272,6 +304,7 @@ companyRoutes.patch("/route47/companies/:companyId/proofs/:proofId", async (c) =
     body.address ?? row.address,
     storedName,
     storedPath,
+    branchId,
     companyId,
     proofId,
   );
@@ -293,12 +326,15 @@ companyRoutes.delete("/route47/companies/:companyId/proofs/:proofId", (c) => {
 
   const row = db
     .prepare(
-      `SELECT file_path AS filePath
+      `SELECT file_path AS filePath, driver_id AS driverId
        FROM proofs WHERE company_id = ? AND proof_id = ?`
     )
-    .get(companyId, proofId) as { filePath: string } | undefined;
+    .get(companyId, proofId) as { filePath: string; driverId: string } | undefined;
 
   if (!row) {
+    return c.json({ message: "Proof not found." }, 404);
+  }
+  if (!adminCanAccessDriver(companyId, c.get("admin"), row.driverId)) {
     return c.json({ message: "Proof not found." }, 404);
   }
 
@@ -321,17 +357,25 @@ companyRoutes.delete("/route47/companies/:companyId/proofs/:proofId", (c) => {
 companyRoutes.get("/route47/companies/:companyId/proofs/:proofId/file", (c) => {
   const companyId = c.req.param("companyId");
   const proofId = c.req.param("proofId");
+  const sessionDriverId = c.get("driverId")?.trim() ?? "";
 
   const row = db
     .prepare(
-      `SELECT file_path AS filePath, mime_type AS mimeType, file_name AS fileName
+      `SELECT file_path AS filePath, mime_type AS mimeType, file_name AS fileName, driver_id AS driverId
        FROM proofs WHERE company_id = ? AND proof_id = ?`
     )
     .get(companyId, proofId) as
-    | { filePath: string; mimeType: string; fileName: string }
+    | { filePath: string; mimeType: string; fileName: string; driverId: string }
     | undefined;
 
   if (!row || !fs.existsSync(row.filePath)) {
+    return c.json({ message: "Proof file not found." }, 404);
+  }
+
+  if (sessionDriverId && row.driverId !== sessionDriverId) {
+    return c.json({ message: "Proof file not found." }, 404);
+  }
+  if (!sessionDriverId && !adminCanAccessDriver(companyId, c.get("admin"), row.driverId)) {
     return c.json({ message: "Proof file not found." }, 404);
   }
 

@@ -100,10 +100,12 @@ authRoutes.post("/route47/invites/redeem", async (c) => {
   if (!driverId) {
     driverId = `drv-${invite.code.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
     driverName = driverName || "Invited Driver";
+    const { ensureDefaultBranch } = await import("../lib/admin-auth.js");
+    const defaultBranch = ensureDefaultBranch(invite.companyId).id;
     db.prepare(
-      `INSERT OR IGNORE INTO drivers (id, company_id, username, password_hash, display_name, vehicle_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(driverId, invite.companyId, driverId, "invite-only", driverName, vehicleId, Date.now());
+      `INSERT OR IGNORE INTO drivers (id, company_id, username, password_hash, display_name, vehicle_id, branch_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(driverId, invite.companyId, driverId, "invite-only", driverName, vehicleId, defaultBranch, Date.now());
   }
 
   const driverDeviceId = newDriverDeviceId();

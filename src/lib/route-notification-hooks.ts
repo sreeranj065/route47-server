@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { NOTIFICATION_TYPES } from "./notification-types.js";
 import { notifyAllAdmins, notifyDriver } from "./notification-service.js";
+import { getDriverBranchId } from "../branch-storage.js";
 
 function driverDisplayName(companyId: string, driverId: string): string {
   if (!driverId) return "Driver";
@@ -8,6 +9,12 @@ function driverDisplayName(companyId: string, driverId: string): string {
     .prepare(`SELECT display_name AS displayName, username FROM drivers WHERE company_id = ? AND id = ?`)
     .get(companyId, driverId) as { displayName?: string; username?: string } | undefined;
   return row?.displayName?.trim() || row?.username?.trim() || driverId;
+}
+
+function driverBranchId(companyId: string, driverId: string): string | undefined {
+  const trimmed = driverId.trim();
+  if (!trimmed) return undefined;
+  return getDriverBranchId(companyId, trimmed);
 }
 
 export function notifyDriverRoutePlanSynced(input: {
@@ -29,6 +36,7 @@ export function notifyDriverRoutePlanSynced(input: {
     input.isNew ? "Driver added stops" : "Driver updated current list",
     `${driverName} ${input.isNew ? "added" : "updated"} their current list (${stopLabel}).`,
     { routeRunId, driverId, stopCount: String(stopCount), source: "driver" },
+    { branchId: driverBranchId(companyId, driverId) },
   );
 }
 
@@ -61,6 +69,7 @@ export function notifyRoutePlanPublished(input: {
       "Route assigned",
       `${driverName} was assigned a route with ${stopCount} stop${stopCount === 1 ? "" : "s"}.`,
       { routeRunId, driverId, stopCount: String(stopCount) },
+      { branchId: driverBranchId(companyId, driverId) },
     );
     return;
   }
@@ -90,6 +99,7 @@ export function notifyRoutePlanPublished(input: {
       "Route reassigned",
       `${driverName} was reassigned a route (${stopCount} stops).`,
       { routeRunId, driverId, stopCount: String(stopCount) },
+      { branchId: driverBranchId(companyId, driverId) },
     );
     return;
   }
@@ -108,6 +118,7 @@ export function notifyRoutePlanPublished(input: {
     "Current list updated",
     `${driverName}'s current list was updated (${stopCount} stops).`,
     { routeRunId, driverId, stopCount: String(stopCount) },
+    { branchId: driverBranchId(companyId, driverId) },
   );
 }
 
@@ -128,6 +139,7 @@ export function notifyRoutePlanRemoved(companyId: string, driverId: string, rout
     "Route cancelled",
     `${driverDisplayName(companyId, driverId)}'s route was cancelled.`,
     { routeRunId, driverId },
+    { branchId: driverBranchId(companyId, driverId) },
   );
 }
 
@@ -156,7 +168,7 @@ export function notifyProofUploaded(input: {
       stopId: input.stopId,
       proofType: input.proofType,
     },
-    { priority: "high" },
+    { priority: "high", branchId: driverBranchId(input.companyId, input.driverId) },
   );
 }
 
@@ -179,6 +191,7 @@ export function notifyActivityEvents(
         "Driver started route",
         `${driverName} started their route.`,
         { driverId, routeRunId: routeId },
+        { branchId: driverBranchId(companyId, driverId) },
       );
     } else if (eventType === "ROUTE_COMPLETED" || eventType === "SHIFT_ENDED") {
       notifyAllAdmins(
@@ -187,6 +200,7 @@ export function notifyActivityEvents(
         "Driver completed route",
         `${driverName} completed their route.`,
         { driverId, routeRunId: routeId },
+        { branchId: driverBranchId(companyId, driverId) },
       );
     } else if (eventType.includes("ISSUE") || eventType === "STOP_FAILED") {
       notifyAllAdmins(
@@ -195,7 +209,7 @@ export function notifyActivityEvents(
         "Driver reported an issue",
         `${driverName} reported an issue${stopId ? ` at stop ${stopId}` : ""}.`,
         { driverId, routeRunId: routeId, stopId, eventType },
-        { priority: "high" },
+        { priority: "high", branchId: driverBranchId(companyId, driverId) },
       );
     }
   }

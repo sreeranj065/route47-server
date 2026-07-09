@@ -14,7 +14,8 @@ import {
   type AdminIdentity,
   type AdminRow,
 } from "../lib/admin-auth.js";
-import { adminCanAccessBranch } from "../lib/branch-filter.js";
+import { adminCanAccessBranch, getAdminAllowedBranchIds } from "../lib/branch-filter.js";
+import { buildBranchStorageLayout } from "../branch-storage.js";
 import { canInviteAnotherAdmin, ensureOrganizationLicense, licenseToJson } from "../lib/license.js";
 import { inviteCode, now, optionalString, rid, stringOr } from "../lib/util.js";
 import { companyRoutes } from "./auth.js";
@@ -252,14 +253,34 @@ companyRoutes.get("/route47/companies/:companyId/admin/branches", (c) => {
   if (!auth.ok) return c.json({ message: "Admin API key required." }, 401);
 
   const companyId = c.req.param("companyId");
-  const branches = listCompanyBranches(companyId).map((row) => ({
-    id: row.id,
-    name: row.name,
-    address: row.address,
-    isPrimary: row.is_primary === 1,
-  }));
+  const allowed = getAdminAllowedBranchIds(companyId, auth.admin);
+  const branches = listCompanyBranches(companyId)
+    .filter((row) => allowed === null || allowed.includes(row.id))
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      address: row.address,
+      isPrimary: row.is_primary === 1,
+    }));
 
   return c.json({ branches });
+});
+
+companyRoutes.get("/route47/companies/:companyId/admin/storage-layout", (c) => {
+  const auth = requireAdmin(c);
+  if (!auth.ok) return c.json({ message: "Admin API key required." }, 401);
+
+  const companyId = c.req.param("companyId");
+  const allowed = getAdminAllowedBranchIds(companyId, auth.admin);
+  const branchIds =
+    allowed === null
+      ? listCompanyBranches(companyId).map((row) => row.id)
+      : allowed;
+
+  return c.json({
+    message: "Branch storage layout ready.",
+    layout: buildBranchStorageLayout(companyId, branchIds),
+  });
 });
 
 companyRoutes.post("/route47/companies/:companyId/admin/branches", async (c) => {

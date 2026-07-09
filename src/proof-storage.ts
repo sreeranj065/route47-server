@@ -1,5 +1,8 @@
 import path from "node:path";
-import { PROOFS_DIR } from "./db.js";
+import {
+  ensureBranchOperationalLayout,
+  proofFolderToOperationalCategory,
+} from "./branch-storage.js";
 
 /** Aligns with Driver `ProofFileNameBuilder.buildProofFolderName()`. */
 export function buildProofFolderName(proofType: string): string {
@@ -35,20 +38,23 @@ export function sanitizePathSegment(value: string, fallback: string): string {
 
 export function buildStoredProofPath(params: {
   companyId: string;
+  branchId: string;
   proofId: string;
   proofType: string;
   routeRunId: string;
   originalFileName: string;
 }): { storedPath: string; storedName: string; relativePath: string } {
   const folder = buildProofFolderName(params.proofType);
+  const category = proofFolderToOperationalCategory(folder);
   const routeFolder = sanitizePathSegment(params.routeRunId, "unassigned");
   const ext = path.extname(params.originalFileName) || ".bin";
   const storedName =
     path.basename(params.originalFileName).trim() ||
     `${sanitizePathSegment(params.proofId, "proof")}${ext}`;
 
-  const relativePath = path.posix.join(routeFolder, folder, storedName);
-  const storedPath = path.join(PROOFS_DIR, params.companyId, relativePath);
+  const branchRoot = ensureBranchOperationalLayout(params.companyId, params.branchId);
+  const relativePath = path.posix.join(category, routeFolder, storedName);
+  const storedPath = path.join(branchRoot, category, routeFolder, storedName);
 
   return { storedPath, storedName, relativePath };
 }

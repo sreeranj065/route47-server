@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { rid, now } from "./util.js";
+import { adminHasBranchAccess } from "./admin-auth.js";
 import {
   NOTIFICATION_TYPES,
   TYPE_CATEGORY,
@@ -133,6 +134,7 @@ export function notifyAllAdmins(
   data?: Record<string, string>,
   options?: { branchId?: string; excludeAdminId?: string; priority?: NotificationPriority },
 ) {
+  const branchId = options?.branchId?.trim() ?? "";
   const admins = db
     .prepare(
       `SELECT id FROM admins
@@ -142,8 +144,9 @@ export function notifyAllAdmins(
 
   const ids: string[] = [];
 
-  const ownerData = { ...data, adminId: "owner" };
-  ids.push(
+  if (!branchId || adminHasBranchAccess(companyId, "owner", branchId)) {
+    const ownerData = { ...data, adminId: "owner" };
+    ids.push(
       createNotification({
         companyId,
         recipientType: "admin",
@@ -155,10 +158,12 @@ export function notifyAllAdmins(
         branchId: options?.branchId,
         priority: options?.priority,
       }),
-  );
+    );
+  }
 
   for (const admin of admins) {
     if (options?.excludeAdminId && admin.id === options.excludeAdminId) continue;
+    if (branchId && !adminHasBranchAccess(companyId, admin.id, branchId)) continue;
     ids.push(
       createNotification({
         companyId,

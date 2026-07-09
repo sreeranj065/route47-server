@@ -82,7 +82,7 @@ export function driverBranchFilterSql(
   companyId: string,
   admin: AdminIdentity | null | undefined,
   driverIdColumn = "driver_id",
-): { clause: string; params: unknown[] } {
+): { clause: string; params: Array<string | number> } {
   const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
   if (allowedBranches === null) {
     return { clause: "", params: [] };
@@ -102,4 +102,83 @@ export function driverBranchFilterSql(
   };
 }
 
+export function branchColumnFilterSql(
+  companyId: string,
+  admin: AdminIdentity | null | undefined,
+  branchColumn = "branch_id",
+): { clause: string; params: Array<string | number> } {
+  const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
+  if (allowedBranches === null) {
+    return { clause: "", params: [] };
+  }
+
+  const defaultBranch = defaultBranchId(companyId);
+  const placeholders = allowedBranches.map(() => "?").join(", ");
+  return {
+    clause: ` AND COALESCE(NULLIF(${branchColumn}, ''), ?) IN (${placeholders})`,
+    params: [defaultBranch, ...allowedBranches],
+  };
+}
+
+export function filterRowsByAccessibleDrivers<T extends { driverId?: unknown }>(
+  rows: T[],
+  companyId: string,
+  admin: AdminIdentity | null | undefined,
+): T[] {
+  const accessibleIds = listAccessibleDriverIds(companyId, admin);
+  if (accessibleIds === null) return rows;
+  const allowed = new Set(accessibleIds);
+  return rows.filter((row) => allowed.has(String(row.driverId ?? "").trim()));
+}
+
 ensureDriverBranchColumn();
+
+export function ensureBranchIsolationSchema() {
+  const proofColumns = db
+    .prepare(`PRAGMA table_info(proofs)`)
+    .all() as Array<{ name: string }>;
+  if (!proofColumns.some((column) => column.name === "branch_id")) {
+    db.exec(`ALTER TABLE proofs ADD COLUMN branch_id TEXT NOT NULL DEFAULT ''`);
+  }
+
+  const geofenceColumns = db
+    .prepare(`PRAGMA table_info(geofences)`)
+    .all() as Array<{ name: string }>;
+  if (!geofenceColumns.some((column) => column.name === "branch_id")) {
+    db.exec(`ALTER TABLE geofences ADD COLUMN branch_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!geofenceColumns.some((column) => column.name === "stop_id")) {
+    db.exec(`ALTER TABLE geofences ADD COLUMN stop_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!geofenceColumns.some((column) => column.name === "route_id")) {
+    db.exec(`ALTER TABLE geofences ADD COLUMN route_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!geofenceColumns.some((column) => column.name === "last_triggered_at_millis")) {
+    db.exec(`ALTER TABLE geofences ADD COLUMN last_triggered_at_millis INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  const heartbeatColumns = db
+    .prepare(`PRAGMA table_info(heartbeats)`)
+    .all() as Array<{ name: string }>;
+  if (!heartbeatColumns.some((column) => column.name === "speed_kmh")) {
+    db.exec(`ALTER TABLE heartbeats ADD COLUMN speed_kmh REAL`);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS branch_shared_resources (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      source_branch_id TEXT NOT NULL,
+      target_branch_id TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_id TEXT NOT NULL,
+      shared_by_admin_id TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_branch_shared_resources_target
+      ON branch_shared_resources (company_id, target_branch_id, resource_type);
+  `);
+}
+
+ensureBranchIsolationSchema();

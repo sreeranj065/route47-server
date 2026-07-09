@@ -11,9 +11,18 @@ import {
   canonicalRouteRunId,
   deleteDuplicateRoutePlansForDriverDay,
 } from "../lib/route-plan-sync.js";
+import {
+  branchColumnFilterSql,
+  defaultBranchId,
+  driverBranchFilterSql,
+  getAdminAllowedBranchIds,
+  resolveDriverBranchId,
+} from "../lib/branch-filter.js";
+import { getDriverBranchId } from "../branch-storage.js";
+import { getAdminBranchIds } from "../lib/admin-auth.js";
 
 const GEOFENCE_SELECT = `SELECT id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
-  driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
+  driver_device_id, stop_id, route_id, last_triggered_at_millis, branch_id, created_at, updated_at
   FROM geofences`;
 
 function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
@@ -23,6 +32,7 @@ function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js")
 companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
   const companyId = c.req.param("companyId");
   const driverId = c.req.query("driverId")?.trim();
+  const branchFilter = driverBranchFilterSql(companyId, c.get("admin"));
 
   const rows = db
     .prepare(
@@ -30,9 +40,10 @@ companyRoutes.get("/route47/companies/:companyId/admin-route-plans", (c) => {
        FROM route_plans
        WHERE company_id = ?
        ${driverId ? "AND (driver_id = ? OR driver_id = '')" : ""}
+       ${branchFilter.clause}
        ORDER BY updated_at DESC`
     )
-    .all(...(driverId ? [companyId, driverId] : [companyId])) as RoutePlanRow[];
+    .all(...(driverId ? [companyId, driverId, ...branchFilter.params] : [companyId, ...branchFilter.params])) as RoutePlanRow[];
 
   const adminRoutePlans = rows.map(routePlanToJson);
 
@@ -199,24 +210,52 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
   const companyId = c.req.param("companyId");
   const company = getCompany(companyId);
   const driverDeviceId = String(c.get("driverDeviceId") ?? "").trim();
+  const sessionDriverId = c.get("driverId")?.trim() ?? "";
+  const admin = c.get("admin");
+  const routeBranchFilter = driverBranchFilterSql(companyId, admin);
+  const geofenceBranchFilter = branchColumnFilterSql(companyId, admin);
 
   const routePlans = (
     db
       .prepare(
         `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
-         FROM route_plans WHERE company_id = ? ORDER BY published_at DESC`
+         FROM route_plans
+         WHERE company_id = ?
+         ${sessionDriverId ? "AND driver_id = ?" : ""}
+         ${routeBranchFilter.clause}
+         ORDER BY published_at DESC`
       )
-      .all(companyId) as RoutePlanRow[]
+      .all(
+        ...(sessionDriverId
+          ? [companyId, sessionDriverId, ...routeBranchFilter.params]
+          : [companyId, ...routeBranchFilter.params]),
+      ) as RoutePlanRow[]
   ).map(routePlanToJson);
+
+  const driverBranchId = sessionDriverId ? getDriverBranchId(companyId, sessionDriverId) : "";
+  const geofenceConditions = [
+    "company_id = ?",
+    "approval_status = 'approved'",
+    sessionDriverId
+      ? `AND COALESCE(NULLIF(branch_id, ''), ?) = ?`
+      : geofenceBranchFilter.clause.replace(/^ AND /, "AND "),
+  ].filter(Boolean);
+
+  const geofenceParams: Array<string | number> = [companyId];
+  if (sessionDriverId) {
+    geofenceParams.push(defaultBranchId(companyId), driverBranchId);
+  } else {
+    geofenceParams.push(...geofenceBranchFilter.params);
+  }
 
   const geofences = (
     db
       .prepare(
         `${GEOFENCE_SELECT}
-         WHERE company_id = ? AND approval_status = 'approved'
-         ORDER BY updated_at DESC`
+         WHERE ${geofenceConditions.join(" ")}
+         ORDER BY updated_at DESC`,
       )
-      .all(companyId) as GeofenceRow[]
+      .all(...geofenceParams) as GeofenceRow[]
   ).map((row) => {
     const json = geofenceToJson(row);
     return {
@@ -262,15 +301,17 @@ companyRoutes.get("/route47/companies/:companyId/admin/geofences", (c) => {
 
   const companyId = c.req.param("companyId");
   const status = c.req.query("approvalStatus")?.trim();
+  const branchFilter = branchColumnFilterSql(companyId, c.get("admin"));
 
   const rows = db
     .prepare(
       `${GEOFENCE_SELECT}
        WHERE company_id = ?
        ${status ? "AND approval_status = ?" : ""}
+       ${branchFilter.clause}
        ORDER BY updated_at DESC`
     )
-    .all(...(status ? [companyId, status] : [companyId])) as GeofenceRow[];
+    .all(...(status ? [companyId, status, ...branchFilter.params] : [companyId, ...branchFilter.params])) as GeofenceRow[];
 
   return c.json({
     message: `${rows.length} geofence(s).`,
@@ -294,16 +335,24 @@ companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) =>
     stopId?: string;
     routeId?: string;
     lastTriggeredAtMillis?: number;
+    branchId?: string;
   }>();
 
   const id = body.id?.trim() || `gf-${crypto.randomBytes(4).toString("hex")}`;
   const now = Date.now();
+  const admin = c.get("admin");
+  const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
+  const branchId =
+    resolveDriverBranchId(companyId, body.branchId) ||
+    (allowedBranches && allowedBranches.length > 0
+      ? allowedBranches[0]
+      : defaultBranchId(companyId));
 
   db.prepare(
     `INSERT INTO geofences (
       id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
-      driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, '', ?, ?, ?, ?, ?)
+      driver_device_id, stop_id, route_id, last_triggered_at_millis, branch_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, '', ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company_id, id) DO UPDATE SET
       name = excluded.name,
       latitude = excluded.latitude,
@@ -313,6 +362,7 @@ companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) =>
       stop_id = excluded.stop_id,
       route_id = excluded.route_id,
       last_triggered_at_millis = excluded.last_triggered_at_millis,
+      branch_id = excluded.branch_id,
       updated_at = excluded.updated_at`
   ).run(
     id,
@@ -325,6 +375,7 @@ companyRoutes.post("/route47/companies/:companyId/admin/geofences", async (c) =>
     body.stopId ?? "",
     body.routeId ?? "",
     body.lastTriggeredAtMillis ?? 0,
+    branchId,
     now,
     now
   );
@@ -445,6 +496,8 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
   }>();
 
   const driverDeviceId = body.driverDeviceId ?? c.get("driverDeviceId");
+  const sessionDriverId = c.get("driverId")?.trim() ?? "";
+  const branchId = getDriverBranchId(companyId, sessionDriverId);
   const incoming = body.geofences ?? [];
   const deletedIds = (body.deletedGeofenceIds ?? [])
     .map((id) => String(id ?? "").trim())
@@ -463,8 +516,8 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
   const upsert = db.prepare(
     `INSERT INTO geofences (
       id, company_id, name, latitude, longitude, radius_meters, source, approval_status,
-      driver_device_id, stop_id, route_id, last_triggered_at_millis, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'driver', 'pending', ?, ?, ?, ?, ?, ?)
+      driver_device_id, stop_id, route_id, last_triggered_at_millis, branch_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'driver', 'pending', ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company_id, id) DO UPDATE SET
       name = excluded.name,
       latitude = excluded.latitude,
@@ -477,6 +530,7 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
         WHEN excluded.last_triggered_at_millis > 0 THEN excluded.last_triggered_at_millis
         ELSE geofences.last_triggered_at_millis
       END,
+      branch_id = excluded.branch_id,
       updated_at = excluded.updated_at`
   );
 
@@ -493,6 +547,7 @@ companyRoutes.post("/route47/companies/:companyId/geofences/sync", async (c) => 
       geofence.stopId ?? "",
       geofence.routeId ?? "",
       geofence.lastTriggeredAtMillis ?? 0,
+      branchId,
       now,
       now
     );
