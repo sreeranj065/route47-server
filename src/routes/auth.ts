@@ -7,7 +7,7 @@ import type { AdminIdentity } from "../lib/admin-auth.js";
 import { readAdminKeyFromHeaders, resolveAdminIdentity } from "../lib/admin-auth.js";
 import { registerDriverAdminRoutes } from "./driver-admin-routes.js";
 
-type AuthEnv = {
+export type AuthEnv = {
   Variables: {
     companyId: string;
     driverId: string;

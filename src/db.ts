@@ -329,10 +329,31 @@ function ensureMessageTables() {
 
     CREATE INDEX IF NOT EXISTS idx_messages_conversation
       ON messages (company_id, conversation_driver_id, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS message_attachments (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      uploader_type TEXT NOT NULL DEFAULT '',
+      file_name TEXT NOT NULL DEFAULT '',
+      file_path TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
   `);
+
+  const messageColumns = db.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
+  if (!messageColumns.some((column) => column.name === "edited_at")) {
+    db.exec(`ALTER TABLE messages ADD COLUMN edited_at INTEGER`);
+  }
+  if (!messageColumns.some((column) => column.name === "deleted_at")) {
+    db.exec(`ALTER TABLE messages ADD COLUMN deleted_at INTEGER`);
+  }
 }
 
 ensureMessageTables();
+
+export const MESSAGE_ATTACHMENTS_DIR = path.join(DATA_DIR, "message-attachments");
+fs.mkdirSync(MESSAGE_ATTACHMENTS_DIR, { recursive: true });
 
 export type GeofenceRow = {
   id: string;

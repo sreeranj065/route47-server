@@ -1,10 +1,13 @@
-import { db, getCompany } from "../db.js";
+import fs from "node:fs";
+import path from "node:path";
+import { db, getCompany, MESSAGE_ATTACHMENTS_DIR } from "../db.js";
 import { adminCanAccessDriver, driverBranchFilterSql } from "../lib/branch-filter.js";
 import { NOTIFICATION_TYPES } from "../lib/notification-types.js";
 import { notifyAllAdmins, notifyDriver } from "../lib/notification-service.js";
 import { hasAdminAccess } from "../lib/route-admin.js";
 import { now, rid } from "../lib/util.js";
-import { companyRoutes } from "./auth.js";
+import { companyRoutes, type AuthEnv } from "./auth.js";
+import type { Context } from "hono";
 
 type MessageRow = {
   id: string;
@@ -16,24 +19,32 @@ type MessageRow = {
   mime_type: string;
   created_at: number;
   read_at: number | null;
+  edited_at: number | null;
+  deleted_at: number | null;
 };
+
+const MESSAGE_SELECT_COLUMNS = `id, company_id, conversation_driver_id, sender_type, body,
+              attachment_url, mime_type, created_at, read_at, edited_at, deleted_at`;
 
 function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
   return hasAdminAccess(c);
 }
 
 function messageToJson(row: MessageRow) {
+  const deleted = row.deleted_at != null;
   return {
     id: row.id,
     companyId: row.company_id,
     conversationDriverId: row.conversation_driver_id,
     senderType: row.sender_type,
-    body: row.body,
-    attachmentUrl: row.attachment_url || undefined,
-    mimeType: row.mime_type || undefined,
+    body: deleted ? "" : row.body,
+    attachmentUrl: deleted ? undefined : row.attachment_url || undefined,
+    mimeType: deleted ? undefined : row.mime_type || undefined,
     createdAtMillis: row.created_at,
     readAtMillis: row.read_at ?? undefined,
     read: row.read_at != null,
+    editedAtMillis: row.edited_at ?? undefined,
+    deleted,
   };
 }
 
@@ -117,13 +128,77 @@ function insertMessage(input: {
 function listMessages(companyId: string, driverId: string): MessageRow[] {
   return db
     .prepare(
-      `SELECT id, company_id, conversation_driver_id, sender_type, body,
-              attachment_url, mime_type, created_at, read_at
+      `SELECT ${MESSAGE_SELECT_COLUMNS}
        FROM messages
        WHERE company_id = ? AND conversation_driver_id = ?
        ORDER BY created_at ASC`,
     )
     .all(companyId, driverId) as MessageRow[];
+}
+
+function getMessage(companyId: string, messageId: string): MessageRow | undefined {
+  return db
+    .prepare(
+      `SELECT ${MESSAGE_SELECT_COLUMNS}
+       FROM messages
+       WHERE company_id = ? AND id = ?`,
+    )
+    .get(companyId, messageId) as MessageRow | undefined;
+}
+
+/**
+ * Returns the caller's role for mutating a specific message, or null when
+ * the caller may not edit/delete it. Admins own admin-sent messages in any
+ * conversation they can access; drivers own driver-sent messages in their
+ * own conversation.
+ */
+function resolveMessageMutationRole(
+  c: {
+    get: ((key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined) &
+      ((key: "driverId") => string | undefined);
+  },
+  companyId: string,
+  message: MessageRow,
+): "admin" | "driver" | null {
+  if (hasAdminAccess(c)) {
+    if (message.sender_type !== "admin") return null;
+    const admin = c.get("admin");
+    if (!adminCanAccessDriver(companyId, admin, message.conversation_driver_id)) return null;
+    return "admin";
+  }
+
+  const driverId = c.get("driverId")?.trim() ?? "";
+  if (
+    driverId &&
+    message.sender_type === "driver" &&
+    message.conversation_driver_id === driverId
+  ) {
+    return "driver";
+  }
+
+  return null;
+}
+
+function deleteAttachmentFileForUrl(companyId: string, attachmentUrl: string) {
+  const match = attachmentUrl.match(/\/messages\/attachments\/([^/]+)\/file/);
+  if (!match) return;
+
+  const attachmentId = match[1];
+  const row = db
+    .prepare(`SELECT file_path FROM message_attachments WHERE company_id = ? AND id = ?`)
+    .get(companyId, attachmentId) as { file_path: string } | undefined;
+
+  if (row?.file_path) {
+    try {
+      fs.unlinkSync(row.file_path);
+    } catch {
+      // File may already be gone; ignore.
+    }
+  }
+  db.prepare(`DELETE FROM message_attachments WHERE company_id = ? AND id = ?`).run(
+    companyId,
+    attachmentId,
+  );
 }
 
 function getDriverRecord(companyId: string, driverId: string) {
@@ -292,8 +367,7 @@ companyRoutes.post("/route47/companies/:companyId/messages/conversations/me/mess
 
   const row = db
     .prepare(
-      `SELECT id, company_id, conversation_driver_id, sender_type, body,
-              attachment_url, mime_type, created_at, read_at
+      `SELECT ${MESSAGE_SELECT_COLUMNS}
        FROM messages WHERE id = ?`,
     )
     .get(messageId) as MessageRow;
@@ -392,11 +466,168 @@ companyRoutes.post("/route47/companies/:companyId/messages/conversations/:driver
 
   const row = db
     .prepare(
-      `SELECT id, company_id, conversation_driver_id, sender_type, body,
-              attachment_url, mime_type, created_at, read_at
+      `SELECT ${MESSAGE_SELECT_COLUMNS}
        FROM messages WHERE id = ?`,
     )
     .get(messageId) as MessageRow;
 
   return c.json({ message: "Message sent.", sentMessage: messageToJson(row), createdAtMillis: createdAt }, 201);
+});
+
+async function handleEditMessage(c: Context<AuthEnv>) {
+  const companyId = c.req.param("companyId") ?? "";
+  const messageId = c.req.param("messageId")?.trim() ?? "";
+
+  const message = messageId ? getMessage(companyId, messageId) : undefined;
+  if (!message) {
+    return c.json({ message: "Message not found." }, 404);
+  }
+  if (message.deleted_at != null) {
+    return c.json({ message: "Message was deleted." }, 409);
+  }
+
+  const role = resolveMessageMutationRole(c, companyId, message);
+  if (!role) {
+    return c.json({ message: "You can only edit your own messages." }, 403);
+  }
+
+  const payload = await c.req.json<{ body?: string }>();
+  const text = payload.body?.trim() ?? "";
+  if (!text && !message.attachment_url) {
+    return c.json({ message: "body is required." }, 400);
+  }
+
+  db.prepare(`UPDATE messages SET body = ?, edited_at = ? WHERE company_id = ? AND id = ?`).run(
+    text,
+    now(),
+    companyId,
+    messageId,
+  );
+
+  const updated = getMessage(companyId, messageId) as MessageRow;
+  return c.json({ message: "Message updated.", updatedMessage: messageToJson(updated) });
+}
+
+companyRoutes.patch("/route47/companies/:companyId/messages/items/:messageId", handleEditMessage);
+// Android's HttpURLConnection cannot send PATCH, so the Driver App uses PUT.
+companyRoutes.put("/route47/companies/:companyId/messages/items/:messageId", handleEditMessage);
+
+companyRoutes.delete("/route47/companies/:companyId/messages/items/:messageId", (c) => {
+  const companyId = c.req.param("companyId");
+  const messageId = c.req.param("messageId")?.trim() ?? "";
+
+  const message = messageId ? getMessage(companyId, messageId) : undefined;
+  if (!message) {
+    return c.json({ message: "Message not found." }, 404);
+  }
+  if (message.deleted_at != null) {
+    return c.json({ message: "Message already deleted.", deletedMessage: messageToJson(message) });
+  }
+
+  const role = resolveMessageMutationRole(c, companyId, message);
+  if (!role) {
+    return c.json({ message: "You can only delete your own messages." }, 403);
+  }
+
+  if (message.attachment_url) {
+    deleteAttachmentFileForUrl(companyId, message.attachment_url);
+  }
+
+  db.prepare(
+    `UPDATE messages
+     SET deleted_at = ?, body = '', attachment_url = '', mime_type = ''
+     WHERE company_id = ? AND id = ?`,
+  ).run(now(), companyId, messageId);
+
+  const updated = getMessage(companyId, messageId) as MessageRow;
+  return c.json({ message: "Message deleted.", deletedMessage: messageToJson(updated) });
+});
+
+companyRoutes.post("/route47/companies/:companyId/messages/attachments", async (c) => {
+  const companyId = c.req.param("companyId");
+  const isAdmin = hasAdminAccess(c);
+  const driverId = c.get("driverId")?.trim() ?? "";
+
+  if (!isAdmin && !driverId) {
+    return c.json({ message: "Authentication required." }, 401);
+  }
+
+  const body = await c.req.parseBody({ all: true });
+  const fields = body as Record<string, string | File | (string | File)[]>;
+  const fileEntry = fields.file;
+  const file = Array.isArray(fileEntry) ? fileEntry[0] : fileEntry;
+
+  if (!(file instanceof File)) {
+    return c.json({ message: "Attachment file is required." }, 400);
+  }
+
+  const maxBytes = 25 * 1024 * 1024;
+  if (file.size > maxBytes) {
+    return c.json({ message: "Attachment too large (max 25 MB)." }, 413);
+  }
+
+  const attachmentId = rid("msgatt");
+  const safeName = (file.name || "attachment.bin").replace(/[^\w.\- ]+/g, "_").slice(0, 120);
+  const storedDir = path.join(MESSAGE_ATTACHMENTS_DIR, companyId);
+  const storedPath = path.join(storedDir, `${attachmentId}-${safeName}`);
+
+  fs.mkdirSync(storedDir, { recursive: true });
+  fs.writeFileSync(storedPath, Buffer.from(await file.arrayBuffer()));
+
+  const mimeType = file.type || "application/octet-stream";
+
+  db.prepare(
+    `INSERT INTO message_attachments (id, company_id, uploader_type, file_name, file_path, mime_type, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    attachmentId,
+    companyId,
+    isAdmin ? "admin" : "driver",
+    safeName,
+    storedPath,
+    mimeType,
+    now(),
+  );
+
+  return c.json(
+    {
+      message: "Attachment uploaded.",
+      attachmentId,
+      attachmentUrl: `/route47/companies/${companyId}/messages/attachments/${attachmentId}/file`,
+      fileName: safeName,
+      mimeType,
+    },
+    201,
+  );
+});
+
+companyRoutes.get("/route47/companies/:companyId/messages/attachments/:attachmentId/file", (c) => {
+  const companyId = c.req.param("companyId");
+  const attachmentId = c.req.param("attachmentId")?.trim() ?? "";
+
+  const isAdmin = hasAdminAccess(c);
+  const driverId = c.get("driverId")?.trim() ?? "";
+  if (!isAdmin && !driverId) {
+    return c.json({ message: "Authentication required." }, 401);
+  }
+
+  const row = db
+    .prepare(
+      `SELECT file_name, file_path, mime_type FROM message_attachments WHERE company_id = ? AND id = ?`,
+    )
+    .get(companyId, attachmentId) as
+    | { file_name: string; file_path: string; mime_type: string }
+    | undefined;
+
+  if (!row || !fs.existsSync(row.file_path)) {
+    return c.json({ message: "Attachment not found." }, 404);
+  }
+
+  const data = fs.readFileSync(row.file_path);
+  return new Response(new Uint8Array(data), {
+    headers: {
+      "Content-Type": row.mime_type || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${row.file_name}"`,
+    },
+  });
 });
