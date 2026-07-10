@@ -6,6 +6,7 @@ import {
   countActiveOwners,
   ensureDefaultBranch,
   getAdminBranchIds,
+  hashAdminKey,
   listCompanyBranches,
   readAdminKeyFromHeaders,
   requireAdminRole,
@@ -380,9 +381,11 @@ adminInviteRoutes.post("/route47/admin-invites/redeem", async (c) => {
   if (!company) return c.json({ message: "Company for this invite no longer exists" }, 404);
 
   const apiKey = `team_${rid("key")}`;
+  // Only the SHA-256 hash is stored — the plaintext key is returned to the
+  // redeeming device once and never persisted server-side.
   db.prepare(
-    `UPDATE admins SET api_key = ?, status = 'active', redeemed_at = ?, disabled_at = NULL WHERE id = ?`,
-  ).run(apiKey, now(), admin.id);
+    `UPDATE admins SET api_key = NULL, api_key_hash = ?, status = 'active', redeemed_at = ?, disabled_at = NULL WHERE id = ?`,
+  ).run(hashAdminKey(apiKey), now(), admin.id);
 
   return c.json({
     message: "Invite redeemed.",

@@ -32,11 +32,21 @@ Railway deploys this repo cleanly via [`railway.json`](./railway.json) (Dockerfi
 
 ## Deploy on your own VPS (Hetzner, DigitalOcean, Lightsail…)
 
-Requires Docker. Clone the repo, edit the env values in [`docker-compose.yml`](./docker-compose.yml), then:
+**One-line installer** (Docker + Caddy HTTPS + nightly backups + update helper) — host [`scripts/install.sh`](./scripts/install.sh) at `get.route47.app`:
+
+```bash
+curl -fsSL https://get.route47.app | sh
+```
+
+It prints your server URL and admin key at the end — paste both into the Route47 Admin App.
+
+**Manual alternative:** requires Docker. Copy [`docker-compose.yml`](./docker-compose.yml), edit the env values, then:
 
 ```bash
 docker compose up -d
 ```
+
+The compose file runs the official published image (`ghcr.io/sreeranj065/route47-server:latest`); `docker compose up --build` builds from source instead if you're developing.
 
 The compose file creates a named volume `route47-data` mounted at `/data`. Put an HTTPS reverse proxy in front (Caddy gives you automatic TLS in two lines) — **the driver app refuses plain-HTTP servers**:
 
@@ -58,6 +68,24 @@ Set `ROUTE47_PUBLIC_URL` to that HTTPS domain so login responses hand drivers th
 | `ROUTE47_ADMIN_API_KEY` | *(none — required)* | Admin API key (header `X-Route47-Admin-Key`). **Must be set before using the Admin app.** |
 | `ROUTE47_PUBLIC_URL` | request origin (proxy-aware) | Public HTTPS URL returned to drivers on login/invite redemption. |
 | `HOST` | `0.0.0.0` | Bind address. |
+
+## Releases & updates
+
+This repository is the **single source of truth** for the Route47 server. Customers deploy the official artifacts — they never maintain their own copy of the code.
+
+**Publishing a release (maintainers):**
+
+1. Bump `version` in `package.json` (this is what `/healthz` reports).
+2. Tag and push: `git tag v1.2.0 && git push --tags`.
+3. [`release.yml`](./.github/workflows/release.yml) builds and pushes `ghcr.io/<owner>/route47-server:1.2.0` + `:latest` and creates a GitHub Release.
+
+**Updating a deployed server (customers):** the Admin App compares your server's `/healthz` version against the latest GitHub Release and shows "Update available" with the right steps:
+
+- **Railway:** service → Deployments → Redeploy.
+- **Render:** Manual Deploy → "Deploy latest reference".
+- **VPS:** `/opt/route47/update.sh` (or `docker compose pull && docker compose up -d`).
+
+Your data always survives updates — everything lives on the `DATA_DIR` volume, and schema migrations run automatically at boot.
 
 ## Finding your server URL afterwards
 

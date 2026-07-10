@@ -1,5 +1,15 @@
 # Render Blueprint — one-click deploy via https://render.com/deploy?repo=<this repo>
-# One web service, one persistent disk holding the SQLite DB + proof photos.
+# One web service, one persistent disk holding the SQLite DB + POD photo files.
+#
+# TARGET STATE (after the first tagged release publishes an image via
+# .github/workflows/release.yml): switch this Blueprint to the official
+# image so customer services track Route47 releases and never hold source —
+# replace `runtime: docker` with:
+#     runtime: image
+#     image:
+#       url: ghcr.io/sreeranj065/route47-server:latest
+# Until that first release exists, the Docker source build below keeps the
+# "Deploy to Render" button working exactly as today.
 services:
   - type: web
     name: route47-server

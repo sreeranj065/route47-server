@@ -1,7 +1,16 @@
 # VPS / self-hosted deployment. Put HTTPS in front (e.g. Caddy with automatic
 # TLS) — the Route47 driver app refuses plain-HTTP servers.
+#
+# Runs the OFFICIAL published image so you never maintain your own copy of
+# the server code. Updating is:
+#   docker compose pull && docker compose up -d
+# (your data is safe — it lives in the route47-data volume).
+#
+# Developers only: `docker compose up --build` builds from local source via
+# the `build:` fallback instead of pulling the image.
 services:
   route47-server:
+    image: ghcr.io/sreeranj065/route47-server:latest
     build: .
     restart: unless-stopped
     ports:

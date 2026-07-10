@@ -17,6 +17,7 @@ export interface AdminRow {
   email: string;
   role: AdminRole;
   api_key: string | null;
+  api_key_hash: string | null;
   invite_code: string | null;
   invited_by: string | null;
   status: "invited" | "active" | "disabled";
@@ -24,6 +25,36 @@ export interface AdminRow {
   created_at: number;
   redeemed_at: number | null;
 }
+
+/** SHA-256 hex digest — admin API keys are stored hashed at rest. */
+export function hashAdminKey(key: string): string {
+  return crypto.createHash("sha256").update(key, "utf8").digest("hex");
+}
+
+/**
+ * Adds the api_key_hash column and migrates any plaintext keys into it,
+ * clearing the plaintext copy. Idempotent; runs at boot. Existing admin
+ * sessions keep working because lookups hash the presented key.
+ */
+export function ensureHashedAdminKeys() {
+  const columns = db.prepare(`PRAGMA table_info(admins)`).all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "api_key_hash")) {
+    db.exec(`ALTER TABLE admins ADD COLUMN api_key_hash TEXT`);
+  }
+
+  const plaintextRows = db
+    .prepare(`SELECT id, api_key FROM admins WHERE api_key IS NOT NULL AND api_key != ''`)
+    .all() as Array<{ id: string; api_key: string }>;
+
+  for (const row of plaintextRows) {
+    db.prepare(`UPDATE admins SET api_key_hash = ?, api_key = NULL WHERE id = ?`).run(
+      hashAdminKey(row.api_key),
+      row.id,
+    );
+  }
+}
+
+ensureHashedAdminKeys();
 
 export interface BranchRow {
   id: string;
@@ -57,9 +88,9 @@ export function resolveAdminIdentity(companyId: string, candidate: string | unde
   const admin = db
     .prepare(
       `SELECT * FROM admins
-       WHERE company_id = ? AND api_key = ? AND status = 'active' AND disabled_at IS NULL`,
+       WHERE company_id = ? AND api_key_hash = ? AND status = 'active' AND disabled_at IS NULL`,
     )
-    .get(companyId, value) as AdminRow | undefined;
+    .get(companyId, hashAdminKey(value)) as AdminRow | undefined;
 
   if (admin) {
     return { id: admin.id, name: admin.name, role: admin.role };
