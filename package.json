@@ -1,6 +1,6 @@
 {
   "name": "route47-customer-server",
-  "version": "0.1.6",
+  "version": "1.0.0",
   "description": "Route47 customer-owned fleet server",
   "private": true,
   "type": "module",
