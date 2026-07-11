@@ -121,7 +121,9 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
   return c.json({ message: "Route progress update stored." });
 });
 
-function latestHeartbeats(companyId: string, maxAgeMs = 1000 * 60 * 15) {
+const LIVE_LOCATION_MAX_AGE_MS = 1000 * 60 * 30;
+
+function latestHeartbeats(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
   const cutoff = Date.now() - maxAgeMs;
   return db
     .prepare(
@@ -147,7 +149,7 @@ function latestHeartbeats(companyId: string, maxAgeMs = 1000 * 60 * 15) {
     .all(companyId, cutoff, companyId) as Array<Record<string, unknown>>;
 }
 
-function latestProgressLocations(companyId: string, maxAgeMs = 1000 * 60 * 15) {
+function latestProgressLocations(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
   const cutoff = Date.now() - maxAgeMs;
   return db
     .prepare(
@@ -199,7 +201,7 @@ function mergeLatestLocations(
   return [...byDriver.values()];
 }
 
-function latestDriverLocations(companyId: string, maxAgeMs = 1000 * 60 * 15) {
+function latestDriverLocations(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
   return mergeLatestLocations(
     latestHeartbeats(companyId, maxAgeMs),
     latestProgressLocations(companyId, maxAgeMs),
@@ -209,7 +211,7 @@ function latestDriverLocations(companyId: string, maxAgeMs = 1000 * 60 * 15) {
 function scopedDriverLocations(
   companyId: string,
   admin: import("../lib/admin-auth.js").AdminIdentity | undefined,
-  maxAgeMs = 1000 * 60 * 15,
+  maxAgeMs = LIVE_LOCATION_MAX_AGE_MS,
 ) {
   const locations = latestDriverLocations(companyId, maxAgeMs);
   return filterRowsByAccessibleDrivers(locations, companyId, admin);
