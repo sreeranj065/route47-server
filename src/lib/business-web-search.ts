@@ -380,13 +380,16 @@ export async function searchBusinessLocations(
   const results: BusinessSearchResult[] = [];
   const seen = new Set<string>();
 
-  for (const hint of hints.slice(0, 6)) {
-    const geocoded = await geocodeHint(hint, options.countryCode);
-    if (!geocoded || !Number.isFinite(geocoded.lat) || !Number.isFinite(geocoded.lng)) continue;
-    const key = `${geocoded.lat.toFixed(5)}_${geocoded.lng.toFixed(5)}`;
+  const geocoded = await Promise.all(
+    hints.slice(0, 6).map((hint) => geocodeHint(hint, options.countryCode)),
+  );
+
+  for (const item of geocoded) {
+    if (!item || !Number.isFinite(item.lat) || !Number.isFinite(item.lng)) continue;
+    const key = `${item.lat.toFixed(5)}_${item.lng.toFixed(5)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    results.push(geocoded);
+    results.push(item);
   }
 
   return results

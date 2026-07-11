@@ -180,6 +180,17 @@ export function ensureBranchIsolationSchema() {
   if (!heartbeatColumns.some((column) => column.name === "speed_kmh")) {
     db.exec(`ALTER TABLE heartbeats ADD COLUMN speed_kmh REAL`);
   }
+  // Live tracking v2: heading, route status and signal strength let the
+  // Admin app render direction of travel and connection quality.
+  if (!heartbeatColumns.some((column) => column.name === "heading_degrees")) {
+    db.exec(`ALTER TABLE heartbeats ADD COLUMN heading_degrees REAL`);
+  }
+  if (!heartbeatColumns.some((column) => column.name === "route_status")) {
+    db.exec(`ALTER TABLE heartbeats ADD COLUMN route_status TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!heartbeatColumns.some((column) => column.name === "signal_level")) {
+    db.exec(`ALTER TABLE heartbeats ADD COLUMN signal_level INTEGER`);
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS branch_shared_resources (

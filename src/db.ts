@@ -451,13 +451,23 @@ export function dailyReportToJson(row: DailyReportRow) {
 }
 
 export function routePlanToJson(row: RoutePlanRow) {
+  // A single corrupt stops_json row must not take down snapshot/plan
+  // endpoints (the raw SyntaxError used to surface in the driver app as a
+  // bare "Syntax error" sync status). Degrade to an empty stop list instead.
+  let stops: unknown[] = [];
+  try {
+    const parsed = JSON.parse(row.stops_json || "[]");
+    if (Array.isArray(parsed)) stops = parsed;
+  } catch {
+    console.warn(`Corrupt stops_json for route plan ${row.route_run_id}; returning empty stops.`);
+  }
   return {
     routeRunId: row.route_run_id,
     routeDateIso: row.route_date_iso,
     driverId: row.driver_id,
     vehicleId: row.vehicle_id,
     status: row.status,
-    stops: JSON.parse(row.stops_json || "[]"),
+    stops,
     publishedAtMillis: row.published_at,
     updatedAtMillis: row.updated_at,
   };

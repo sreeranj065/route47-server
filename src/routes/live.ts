@@ -13,7 +13,7 @@ function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js")
 
 companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) => {
   const companyId = c.get("companyId");
-  const body = await c.req.json<{
+  type HeartbeatBody = {
     companyId?: string;
     driverId?: string;
     driverDeviceId?: string;
@@ -25,19 +25,30 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
     batteryLevelPercent?: number;
     networkStatus?: string;
     speedKmh?: number;
+    headingDegrees?: number;
+    routeStatus?: string;
+    signalLevel?: number;
     appVersionName?: string;
     appBuildType?: string;
     createdAtMillis?: number;
-  }>();
+  };
+
+  let body: HeartbeatBody;
+  try {
+    body = await c.req.json<HeartbeatBody>();
+  } catch {
+    return c.json({ message: "Heartbeat body must be valid JSON." }, 400);
+  }
 
   const createdAt = body.createdAtMillis ?? Date.now();
 
   db.prepare(
     `INSERT INTO heartbeats (
       company_id, driver_id, driver_device_id, vehicle_id, route_run_id, active_stop_id,
-      latitude, longitude, battery_level_percent, network_status, speed_kmh, app_version_name,
+      latitude, longitude, battery_level_percent, network_status, speed_kmh,
+      heading_degrees, route_status, signal_level, app_version_name,
       app_build_type, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     companyId,
     body.driverId ?? c.get("driverId"),
@@ -50,6 +61,9 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
     body.batteryLevelPercent ?? null,
     body.networkStatus ?? "unknown",
     body.speedKmh ?? null,
+    body.headingDegrees ?? null,
+    body.routeStatus ?? "",
+    body.signalLevel ?? null,
     body.appVersionName ?? "",
     body.appBuildType ?? "",
     createdAt
@@ -114,7 +128,9 @@ function latestHeartbeats(companyId: string, maxAgeMs = 1000 * 60 * 15) {
       `SELECT h.company_id AS companyId, h.driver_id AS driverId, h.driver_device_id AS driverDeviceId,
               h.vehicle_id AS vehicleId, h.route_run_id AS routeRunId, h.active_stop_id AS activeStopId,
               h.latitude, h.longitude, h.battery_level_percent AS batteryLevelPercent,
-              h.speed_kmh AS speedKmh, h.network_status AS networkStatus, h.app_version_name AS appVersionName,
+              h.speed_kmh AS speedKmh, h.heading_degrees AS headingDegrees,
+              h.route_status AS routeStatus, h.signal_level AS signalLevel,
+              h.network_status AS networkStatus, h.app_version_name AS appVersionName,
               h.created_at AS createdAtMillis
        FROM heartbeats h
        INNER JOIN (
@@ -138,6 +154,8 @@ function latestProgressLocations(companyId: string, maxAgeMs = 1000 * 60 * 15) {
       `SELECT p.company_id AS companyId, p.driver_id AS driverId, p.driver_device_id AS driverDeviceId,
               p.vehicle_id AS vehicleId, p.route_run_id AS routeRunId, p.stop_id AS activeStopId,
               p.latitude, p.longitude, NULL AS batteryLevelPercent,
+              NULL AS speedKmh, NULL AS headingDegrees,
+              '' AS routeStatus, NULL AS signalLevel,
               'route-progress' AS networkStatus, '' AS appVersionName,
               p.created_at AS createdAtMillis
        FROM route_progress p

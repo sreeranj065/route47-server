@@ -76,5 +76,12 @@ app.notFound((c) => c.json({ message: `Not found: ${c.req.method} ${c.req.path}`
 
 app.onError((error, c) => {
   console.error(error);
-  return c.json({ message: error.message || "Internal server error." }, 500);
+  // Raw JSON SyntaxError messages ("Unexpected token…", "syntax error") used
+  // to leak straight into the apps' sync status lines. Return something a
+  // fleet admin can act on instead, and keep the full error in server logs.
+  const message =
+    error instanceof SyntaxError
+      ? "Invalid request payload (malformed JSON). Please retry the sync."
+      : error.message || "Internal server error.";
+  return c.json({ message }, 500);
 });
