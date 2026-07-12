@@ -21,8 +21,15 @@ services:
       ROUTE47_ADMIN_API_KEY: change-me-to-a-long-random-string
       # Public HTTPS URL drivers should connect to (your Caddy/reverse-proxy domain).
       ROUTE47_PUBLIC_URL: https://route47.your-domain.example
+      # Self-update (VPS only): mount docker.sock + compose dir below to enable.
+      ROUTE47_HOSTING_MODE: docker
+      ROUTE47_SELF_UPDATE_ENABLED: "true"
+      ROUTE47_COMPOSE_DIR: /host-compose
     volumes:
       - route47-data:/data
+      # Uncomment for in-app self-update from the Admin App (VPS installs only):
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # - .:/host-compose:ro
 
 volumes:
   route47-data:

@@ -23,5 +23,7 @@ services:
     envVars:
       - key: DATA_DIR
         value: /data
+      - key: ROUTE47_HOSTING_MODE
+        value: render
       - key: ROUTE47_ADMIN_API_KEY
         generateValue: true # random admin key per deploy; view it in the Render dashboard

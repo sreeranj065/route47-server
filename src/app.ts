@@ -13,6 +13,7 @@ import "./routes/messages.js";
 import "./routes/branch-sharing.js";
 import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
+import "./routes/admin-server-update.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";
 import { migrateMessageAttachmentPaths } from "./message-attachment-migration.js";
 
@@ -65,7 +66,14 @@ app.get("/health", (c) => c.json(buildHealthPayload()));
 // Minimal unauthenticated probe for hosting platforms (Render healthCheckPath,
 // Railway healthcheck). /health stays as the richer payload used by the apps.
 app.get("/healthz", (c) =>
-  c.json({ ok: true, version: SERVER_CONFIG.version })
+  c.json({
+    ok: true,
+    version: SERVER_CONFIG.version,
+    hostingMode: SERVER_CONFIG.hostingMode,
+    selfUpdateSupported:
+      process.env.ROUTE47_SELF_UPDATE_ENABLED === "true" &&
+      (SERVER_CONFIG.hostingMode === "docker" || SERVER_CONFIG.hostingMode === "vps"),
+  })
 );
 
 app.route("/", authRoutes);

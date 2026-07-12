@@ -24,7 +24,10 @@ COPY --from=build /app/dist ./dist
 # a VOLUME instruction: Railway rejects Dockerfiles containing VOLUME). The
 # container runs as root because Render/Railway mount persistent disks
 # root-owned; a non-root user would hit EACCES on first write.
-RUN mkdir -p /data
+# Self-update on VPS: Docker CLI talks to the host daemon via mounted socket.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+RUN mkdir -p /usr/local/lib/docker/cli-plugins
+COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 EXPOSE 4700
 # PORT is injected by Render/Railway; the server falls back to 4700 locally.
 CMD ["node", "dist/index.js"]

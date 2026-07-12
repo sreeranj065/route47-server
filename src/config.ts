@@ -20,17 +20,35 @@ function readPackageVersion(): string {
 
 export const SERVER_VERSION = readPackageVersion();
 
+export type ServerHostingMode = "docker" | "vps" | "railway" | "render" | "development";
+
+function readHostingMode(): ServerHostingMode {
+  const raw = process.env.ROUTE47_HOSTING_MODE?.trim().toLowerCase();
+  if (raw === "docker" || raw === "vps" || raw === "railway" || raw === "render") return raw;
+  return "development";
+}
+
+export const SERVER_HOSTING_MODE = readHostingMode();
+
 export const SERVER_CONFIG = {
   name: "Route47 Customer Server",
   shortName: "route47-server",
   deploymentMode: "production" as const,
+  hostingMode: SERVER_HOSTING_MODE,
   version: SERVER_VERSION,
 } as const;
 
 export function buildHealthPayload(extra: Record<string, unknown> = {}) {
+  const selfUpdateEnabled = process.env.ROUTE47_SELF_UPDATE_ENABLED === "true";
+  const selfUpdateSupported =
+    selfUpdateEnabled &&
+    (SERVER_HOSTING_MODE === "docker" || SERVER_HOSTING_MODE === "vps");
+
   return {
     ok: true,
     deploymentMode: SERVER_CONFIG.deploymentMode,
+    hostingMode: SERVER_HOSTING_MODE,
+    selfUpdateSupported,
     serverName: SERVER_CONFIG.name,
     serverVersion: SERVER_VERSION,
     version: SERVER_VERSION,

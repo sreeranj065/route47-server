@@ -57,8 +57,13 @@ services:
       DATA_DIR: /data
       ROUTE47_ADMIN_API_KEY: $ADMIN_KEY
       ROUTE47_PUBLIC_URL: $PUBLIC_URL
+      ROUTE47_HOSTING_MODE: docker
+      ROUTE47_SELF_UPDATE_ENABLED: "true"
+      ROUTE47_COMPOSE_DIR: /host-compose
     volumes:
       - route47-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - $INSTALL_DIR:/host-compose:ro
 
   caddy:
     image: caddy:2
@@ -88,8 +93,13 @@ services:
     environment:
       DATA_DIR: /data
       ROUTE47_ADMIN_API_KEY: $ADMIN_KEY
+      ROUTE47_HOSTING_MODE: docker
+      ROUTE47_SELF_UPDATE_ENABLED: "true"
+      ROUTE47_COMPOSE_DIR: /host-compose
     volumes:
       - route47-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - $INSTALL_DIR:/host-compose:ro
 
 volumes:
   route47-data:
