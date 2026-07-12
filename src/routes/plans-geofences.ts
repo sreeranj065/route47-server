@@ -20,7 +20,12 @@ import {
   sharedResourceIds,
 } from "../lib/branch-filter.js";
 import { getDriverBranchId } from "../branch-storage.js";
-import { getAdminBranchIds, syncPrimaryBranchFromCompanyProfile } from "../lib/admin-auth.js";
+import {
+  ensureDefaultBranch,
+  getAdminBranchIds,
+  syncPrimaryBranchFromCompanyProfile,
+  type BranchRow,
+} from "../lib/admin-auth.js";
 
 /** Route plans explicitly shared to any of the given branches, excluding ones already loaded. */
 function loadSharedRoutePlans(
@@ -373,6 +378,29 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       ).map((row) => row.id)
     : [];
 
+  let depot: {
+    branchId: string;
+    name: string;
+    address: string;
+    latitude: number | null;
+    longitude: number | null;
+  } | null = null;
+
+  if (sessionDriverId) {
+    const branchId = driverBranchId || defaultBranchId(companyId);
+    const branchRow = db
+      .prepare(`SELECT * FROM company_branches WHERE company_id = ? AND id = ?`)
+      .get(companyId, branchId) as BranchRow | undefined;
+    const branch = branchRow ?? ensureDefaultBranch(companyId);
+    depot = {
+      branchId: branch.id,
+      name: branch.name,
+      address: branch.address ?? "",
+      latitude: branch.latitude,
+      longitude: branch.longitude,
+    };
+  }
+
   return c.json({
     message: "Admin snapshot ready.",
     snapshot: {
@@ -382,6 +410,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       adminRoutePlans: routePlans,
       geofences,
       rejectedGeofenceIds,
+      depot,
     },
   });
 });
