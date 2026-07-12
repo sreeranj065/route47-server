@@ -20,6 +20,7 @@ import {
   sharedResourceIds,
 } from "../lib/branch-filter.js";
 import { getDriverBranchId } from "../branch-storage.js";
+import { resolveDriverDepot } from "../lib/depot.js";
 import {
   ensureDefaultBranch,
   getAdminBranchIds,
@@ -224,9 +225,14 @@ companyRoutes.get("/route47/companies/:companyId/admin/company", (c) => {
     return c.json({ message: "Company not found." }, 404);
   }
 
+  const primary = ensureDefaultBranch(companyId);
+
   return c.json({
     id: company.id,
     name: company.name,
+    address: primary.address ?? "",
+    latitude: primary.latitude ?? null,
+    longitude: primary.longitude ?? null,
     createdAt: new Date(company.createdAt).toISOString(),
     updatedAt: null,
   });
@@ -280,7 +286,10 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
   const companyId = c.req.param("companyId");
   const company = getCompany(companyId);
   const driverDeviceId = String(c.get("driverDeviceId") ?? "").trim();
-  const sessionDriverId = c.get("driverId")?.trim() ?? "";
+  const sessionDriverId =
+    c.get("driverId")?.trim() ||
+    c.req.header("X-Route47-Driver-Id")?.trim() ||
+    "";
   const admin = c.get("admin");
   const routeBranchFilter = driverBranchFilterSql(companyId, admin);
   const geofenceBranchFilter = branchColumnFilterSql(companyId, admin);
@@ -378,28 +387,9 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       ).map((row) => row.id)
     : [];
 
-  let depot: {
-    branchId: string;
-    name: string;
-    address: string;
-    latitude: number | null;
-    longitude: number | null;
-  } | null = null;
-
-  if (sessionDriverId) {
-    const branchId = driverBranchId || defaultBranchId(companyId);
-    const branchRow = db
-      .prepare(`SELECT * FROM company_branches WHERE company_id = ? AND id = ?`)
-      .get(companyId, branchId) as BranchRow | undefined;
-    const branch = branchRow ?? ensureDefaultBranch(companyId);
-    depot = {
-      branchId: branch.id,
-      name: branch.name,
-      address: branch.address ?? "",
-      latitude: branch.latitude,
-      longitude: branch.longitude,
-    };
-  }
+  const depot = sessionDriverId
+    ? resolveDriverDepot(companyId, sessionDriverId)
+    : null;
 
   return c.json({
     message: "Admin snapshot ready.",
@@ -412,6 +402,31 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       rejectedGeofenceIds,
       depot,
     },
+  });
+});
+
+companyRoutes.get("/route47/companies/:companyId/driver/depot", (c) => {
+  const companyId = c.req.param("companyId");
+  const sessionDriverId =
+    c.get("driverId")?.trim() ||
+    c.req.header("X-Route47-Driver-Id")?.trim() ||
+    "";
+
+  if (!sessionDriverId) {
+    return c.json({ message: "Driver authentication required." }, 401);
+  }
+
+  const depot = resolveDriverDepot(companyId, sessionDriverId);
+  if (!depot) {
+    return c.json({ message: "Depot not found for this driver." }, 404);
+  }
+
+  const company = getCompany(companyId);
+
+  return c.json({
+    message: "Driver depot ready.",
+    companyName: company?.name ?? companyId,
+    depot,
   });
 });
 

@@ -219,7 +219,36 @@ companyRoutes.use("/route47/companies/:companyId/*", async (c, next) => {
 
   const bearer = bearerToken(c.req.header("Authorization"));
   const adminKeyHeader = c.req.header("X-Route47-Admin-Key")?.trim();
-  const adminIdentity = resolveAdminIdentity(companyId, readAdminKeyFromHeaders(c.req.header("Authorization"), adminKeyHeader));
+
+  // Device tokens take precedence over admin bearer keys so driver requests
+  // always resolve sessionDriverId from the signed-in driver profile.
+  const session = resolveDeviceToken(bearer);
+  if (session) {
+    if (session.companyId !== companyId) {
+      return c.json({ message: "Token does not match company." }, 403);
+    }
+
+    const driverStillActive = db
+      .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
+      .get(session.companyId, session.driverId);
+
+    if (!driverStillActive) {
+      return c.json({ message: "Driver profile was removed by your dispatcher." }, 401);
+    }
+
+    c.set("companyId", companyId);
+    c.set("driverId", session.driverId);
+    c.set("driverDeviceId", session.driverDeviceId);
+    c.set("vehicleId", session.vehicleId);
+
+    await next();
+    return;
+  }
+
+  const adminIdentity = resolveAdminIdentity(
+    companyId,
+    readAdminKeyFromHeaders(c.req.header("Authorization"), adminKeyHeader),
+  );
 
   if (adminIdentity) {
     c.set("companyId", companyId);
@@ -230,29 +259,7 @@ companyRoutes.use("/route47/companies/:companyId/*", async (c, next) => {
     return next();
   }
 
-  const session = resolveDeviceToken(bearer);
-  if (!session) {
-    return c.json({ message: "Missing or invalid device auth token." }, 401);
-  }
-
-  if (session.companyId !== companyId) {
-    return c.json({ message: "Token does not match company." }, 403);
-  }
-
-  const driverStillActive = db
-    .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
-    .get(session.companyId, session.driverId);
-
-  if (!driverStillActive) {
-    return c.json({ message: "Driver profile was removed by your dispatcher." }, 401);
-  }
-
-  c.set("companyId", companyId);
-  c.set("driverId", session.driverId);
-  c.set("driverDeviceId", session.driverDeviceId);
-  c.set("vehicleId", session.vehicleId);
-
-  await next();
+  return c.json({ message: "Missing or invalid device auth token." }, 401);
 });
 
 companyRoutes.get("/route47/companies/:companyId/health", (c) => {
