@@ -118,6 +118,10 @@ authRoutes.post("/route47/invites/redeem", async (c) => {
 
   db.prepare(`UPDATE invites SET used_at = ? WHERE code = ?`).run(Date.now(), invite.code);
 
+  db.prepare(
+    `UPDATE drivers SET device_activated_at = COALESCE(device_activated_at, ?) WHERE id = ? AND company_id = ?`
+  ).run(Date.now(), driverId, invite.companyId);
+
   return c.json(
     buildConnectionResponse({
       message: "Device connected to company server.",
@@ -138,6 +142,7 @@ authRoutes.post("/route47/drivers/login", async (c) => {
   const body = await c.req.json<{
     username?: string;
     password?: string;
+    inviteCode?: string;
     companyId?: string;
     client?: string;
     requestedAtMillis?: number;
@@ -145,6 +150,7 @@ authRoutes.post("/route47/drivers/login", async (c) => {
 
   const username = body.username?.trim() ?? "";
   const password = body.password ?? "";
+  const inviteCode = body.inviteCode?.trim() ?? "";
   const requestedCompanyId = body.companyId?.trim() ?? "";
 
   if (!username || !password) {
@@ -154,7 +160,8 @@ authRoutes.post("/route47/drivers/login", async (c) => {
   const driver = db
     .prepare(
       `SELECT id, company_id AS companyId, username, password_hash AS passwordHash,
-              display_name AS displayName, vehicle_id AS vehicleId
+              display_name AS displayName, vehicle_id AS vehicleId,
+              device_activated_at AS deviceActivatedAt
        FROM drivers
        WHERE username = ? ${requestedCompanyId ? "AND company_id = ?" : ""}
        LIMIT 1`
@@ -167,6 +174,7 @@ authRoutes.post("/route47/drivers/login", async (c) => {
         passwordHash: string;
         displayName: string;
         vehicleId: string;
+        deviceActivatedAt: number | null;
       }
     | undefined;
 
@@ -179,6 +187,61 @@ authRoutes.post("/route47/drivers/login", async (c) => {
     return c.json({ message: "Company not found." }, 404);
   }
 
+  const needsInvite = driver.deviceActivatedAt == null || driver.passwordHash === "invite-only";
+
+  if (needsInvite) {
+    if (!inviteCode) {
+      return c.json(
+        {
+          message: "First-time setup requires an invite code from your dispatcher.",
+          inviteRequired: true,
+        },
+        403
+      );
+    }
+
+    const invite = db
+      .prepare(
+        `SELECT code, company_id AS companyId, driver_id AS driverId, vehicle_id AS vehicleId,
+                expires_at AS expiresAt, used_at AS usedAt
+         FROM invites WHERE code = ?`
+      )
+      .get(inviteCode) as
+      | {
+          code: string;
+          companyId: string;
+          driverId: string | null;
+          vehicleId: string;
+          expiresAt: number | null;
+          usedAt: number | null;
+        }
+      | undefined;
+
+    if (!invite) {
+      return c.json({ message: "Invalid or expired invite. Ask your dispatcher for a new code." }, 404);
+    }
+
+    if (invite.companyId !== driver.companyId) {
+      return c.json({ message: "Invite code does not match your fleet account." }, 400);
+    }
+
+    if (invite.driverId && invite.driverId !== driver.id) {
+      return c.json({ message: "Invite code is for a different driver." }, 400);
+    }
+
+    if (invite.expiresAt && invite.expiresAt < Date.now()) {
+      return c.json({ message: "Invite code has expired." }, 410);
+    }
+
+    const vehicleId = invite.vehicleId || driver.vehicleId;
+    db.prepare(`UPDATE invites SET used_at = ? WHERE code = ?`).run(Date.now(), invite.code);
+    db.prepare(
+      `UPDATE drivers SET device_activated_at = ?, vehicle_id = CASE WHEN ? != '' THEN ? ELSE vehicle_id END
+       WHERE id = ? AND company_id = ?`
+    ).run(Date.now(), vehicleId, vehicleId, driver.id, driver.companyId);
+    driver.vehicleId = vehicleId;
+  }
+
   const driverDeviceId = newDriverDeviceId();
   const token = createDeviceToken({
     companyId: driver.companyId,
@@ -187,9 +250,15 @@ authRoutes.post("/route47/drivers/login", async (c) => {
     vehicleId: driver.vehicleId,
   });
 
+  if (!needsInvite) {
+    db.prepare(
+      `UPDATE drivers SET device_activated_at = COALESCE(device_activated_at, ?) WHERE id = ? AND company_id = ?`
+    ).run(Date.now(), driver.id, driver.companyId);
+  }
+
   return c.json(
     buildConnectionResponse({
-      message: "Signed in to company server.",
+      message: needsInvite ? "Device connected to company server." : "Signed in to fleet server.",
       serverUrl: publicServerUrl(c),
       companyId: driver.companyId,
       companyName: company.name,

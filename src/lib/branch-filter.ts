@@ -11,6 +11,25 @@ export function ensureDriverBranchColumn() {
   }
 }
 
+/** Tracks first successful device pairing so returning drivers can log in without an invite. */
+export function ensureDriverDeviceActivatedColumn() {
+  const columns = db
+    .prepare(`PRAGMA table_info(drivers)`)
+    .all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "device_activated_at")) {
+    db.exec(`ALTER TABLE drivers ADD COLUMN device_activated_at INTEGER`);
+    // Drivers who already paired a device before this column existed.
+    db.exec(`
+      UPDATE drivers
+      SET device_activated_at = (
+        SELECT MIN(created_at) FROM device_tokens WHERE driver_id = drivers.id
+      )
+      WHERE device_activated_at IS NULL
+        AND id IN (SELECT driver_id FROM device_tokens)
+    `);
+  }
+}
+
 export function defaultBranchId(companyId: string): string {
   return ensureDefaultBranch(companyId).id;
 }

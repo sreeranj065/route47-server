@@ -11,11 +11,14 @@ import "./routes/admin-team.js";
 import "./routes/notifications.js";
 import "./routes/messages.js";
 import "./routes/branch-sharing.js";
+import { ensureDriverDeviceActivatedColumn } from "./lib/branch-filter.js";
 import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
 import "./routes/admin-server-update.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";
 import { migrateMessageAttachmentPaths } from "./message-attachment-migration.js";
+
+ensureDriverDeviceActivatedColumn();
 
 try {
   const migratedProofs = migrateFlatProofPaths();
