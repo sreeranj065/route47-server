@@ -20,7 +20,7 @@ import {
   sharedResourceIds,
 } from "../lib/branch-filter.js";
 import { getDriverBranchId } from "../branch-storage.js";
-import { getAdminBranchIds } from "../lib/admin-auth.js";
+import { getAdminBranchIds, syncPrimaryBranchFromCompanyProfile } from "../lib/admin-auth.js";
 
 /** Route plans explicitly shared to any of the given branches, excluding ones already loaded. */
 function loadSharedRoutePlans(
@@ -249,6 +249,12 @@ companyRoutes.patch("/route47/companies/:companyId/admin/company", async (c) => 
     `INSERT INTO companies (id, name, created_at) VALUES (?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name`,
   ).run(companyId, name, now);
+
+  syncPrimaryBranchFromCompanyProfile(companyId, {
+    address: body.address,
+    latitude: body.latitude,
+    longitude: body.longitude,
+  });
 
   const company = getCompany(companyId);
 

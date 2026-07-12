@@ -6,12 +6,15 @@ import {
   countActiveOwners,
   ensureDefaultBranch,
   getAdminBranchIds,
+  getAdminDefaultBranchId,
   hashAdminKey,
   listCompanyBranches,
   readAdminKeyFromHeaders,
   requireAdminRole,
   resolveAdminIdentity,
   setAdminBranchIds,
+  setAdminDefaultBranchId,
+  syncPrimaryBranchFromCompanyProfile,
   type AdminIdentity,
   type AdminRow,
 } from "../lib/admin-auth.js";
@@ -245,7 +248,26 @@ companyRoutes.get("/route47/companies/:companyId/admin/team/me", (c) => {
     companyId,
     companyName: company.name,
     branchIds: getAdminBranchIds(companyId, auth.admin.id),
+    defaultBranchId: getAdminDefaultBranchId(companyId, auth.admin.id),
     license: licenseToJson(ensureOrganizationLicense(companyId)),
+  });
+});
+
+companyRoutes.patch("/route47/companies/:companyId/admin/team/me", async (c) => {
+  const auth = requireAdmin(c);
+  if (!auth.ok) return c.json({ message: "Admin API key required." }, 401);
+
+  const companyId = c.req.param("companyId");
+  const body = await c.req.json<{ defaultBranchId?: string }>();
+  const branchId = body.defaultBranchId?.trim() ?? "";
+  if (!branchId) return c.json({ message: "defaultBranchId is required" }, 400);
+
+  const result = setAdminDefaultBranchId(companyId, auth.admin.id, branchId);
+  if (!result.ok) return c.json({ message: result.message }, 400);
+
+  return c.json({
+    defaultBranchId: getAdminDefaultBranchId(companyId, auth.admin.id),
+    message: "Default branch updated.",
   });
 });
 
@@ -261,7 +283,10 @@ companyRoutes.get("/route47/companies/:companyId/admin/branches", (c) => {
       id: row.id,
       name: row.name,
       address: row.address,
+      latitude: row.latitude ?? null,
+      longitude: row.longitude ?? null,
       isPrimary: row.is_primary === 1,
+      isDefaultForMe: row.id === getAdminDefaultBranchId(companyId, auth.admin.id),
     }));
 
   return c.json({ branches });
@@ -292,7 +317,13 @@ companyRoutes.post("/route47/companies/:companyId/admin/branches", async (c) => 
   }
 
   const companyId = c.req.param("companyId");
-  const body = await c.req.json<{ name?: string; address?: string; isPrimary?: boolean }>();
+  const body = await c.req.json<{
+    name?: string;
+    address?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    isPrimary?: boolean;
+  }>();
   const name = body.name?.trim() ?? "";
   if (!name) return c.json({ message: "name is required" }, 400);
 
@@ -303,9 +334,18 @@ companyRoutes.post("/route47/companies/:companyId/admin/branches", async (c) => 
   }
 
   db.prepare(
-    `INSERT INTO company_branches (id, company_id, name, address, is_primary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, companyId, name, body.address?.trim() ?? "", body.isPrimary ? 1 : 0, ts);
+    `INSERT INTO company_branches (id, company_id, name, address, latitude, longitude, is_primary, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    companyId,
+    name,
+    body.address?.trim() ?? "",
+    body.latitude ?? null,
+    body.longitude ?? null,
+    body.isPrimary ? 1 : 0,
+    ts,
+  );
 
   const row = db.prepare(`SELECT * FROM company_branches WHERE id = ?`).get(id) as unknown as import("../lib/admin-auth.js").BranchRow;
   return c.json(branchToJson(row));
@@ -324,7 +364,13 @@ companyRoutes.patch("/route47/companies/:companyId/admin/branches/:branchId", as
     return c.json({ message: "Branch not found." }, 404);
   }
 
-  const body = await c.req.json<{ name?: string; address?: string; isPrimary?: boolean }>();
+  const body = await c.req.json<{
+    name?: string;
+    address?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    isPrimary?: boolean;
+  }>();
   if (body.isPrimary) {
     db.prepare(`UPDATE company_branches SET is_primary = 0 WHERE company_id = ?`).run(companyId);
   }
@@ -333,11 +379,17 @@ companyRoutes.patch("/route47/companies/:companyId/admin/branches/:branchId", as
     `UPDATE company_branches
      SET name = COALESCE(?, name),
          address = COALESCE(?, address),
+         latitude = CASE WHEN ? IS NULL THEN latitude ELSE ? END,
+         longitude = CASE WHEN ? IS NULL THEN longitude ELSE ? END,
          is_primary = CASE WHEN ? IS NULL THEN is_primary ELSE ? END
      WHERE company_id = ? AND id = ?`,
   ).run(
     optionalString(body.name) ?? null,
     body.address !== undefined ? body.address.trim() : null,
+    body.latitude === undefined ? null : 1,
+    body.latitude ?? null,
+    body.longitude === undefined ? null : 1,
+    body.longitude ?? null,
     body.isPrimary === undefined ? null : body.isPrimary ? 1 : 0,
     body.isPrimary ? 1 : 0,
     companyId,
@@ -396,6 +448,7 @@ adminInviteRoutes.post("/route47/admin-invites/redeem", async (c) => {
     name: admin.name,
     role: admin.role,
     branchIds: getAdminBranchIds(company.id, admin.id),
+    defaultBranchId: getAdminDefaultBranchId(company.id, admin.id),
   });
 });
 

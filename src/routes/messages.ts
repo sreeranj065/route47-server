@@ -8,6 +8,7 @@ import {
   driverBranchFilterSql,
   getAdminAllowedBranchIds,
 } from "../lib/branch-filter.js";
+import { getAdminDefaultBranchId } from "../lib/admin-auth.js";
 import { NOTIFICATION_TYPES } from "../lib/notification-types.js";
 import { notifyAllAdmins, notifyDriver } from "../lib/notification-service.js";
 import { hasAdminAccess } from "../lib/route-admin.js";
@@ -583,8 +584,9 @@ companyRoutes.post("/route47/companies/:companyId/messages/attachments", async (
     branchId = getDriverBranchId(companyId, driverId);
   } else {
     const admin = c.get("admin");
-    const allowed = admin ? getAdminAllowedBranchIds(companyId, admin) : null;
-    branchId = allowed && allowed.length > 0 ? allowed[0] : defaultBranchId(companyId);
+    branchId = admin
+      ? getAdminDefaultBranchId(companyId, admin.id)
+      : defaultBranchId(companyId);
   }
 
   const storedDir = path.join(ensureBranchOperationalLayout(companyId, branchId), "Messages");

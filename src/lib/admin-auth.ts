@@ -61,9 +61,29 @@ export interface BranchRow {
   company_id: string;
   name: string;
   address: string;
+  latitude: number | null;
+  longitude: number | null;
   is_primary: number;
   created_at: number;
 }
+
+/** Per-admin default branch flag on admin_branch_access (Phase 5b). */
+export function ensureAdminBranchDefaultSchema() {
+  const accessColumns = db.prepare(`PRAGMA table_info(admin_branch_access)`).all() as Array<{ name: string }>;
+  if (!accessColumns.some((column) => column.name === "is_default")) {
+    db.exec(`ALTER TABLE admin_branch_access ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  const branchColumns = db.prepare(`PRAGMA table_info(company_branches)`).all() as Array<{ name: string }>;
+  if (!branchColumns.some((column) => column.name === "latitude")) {
+    db.exec(`ALTER TABLE company_branches ADD COLUMN latitude REAL`);
+  }
+  if (!branchColumns.some((column) => column.name === "longitude")) {
+    db.exec(`ALTER TABLE company_branches ADD COLUMN longitude REAL`);
+  }
+}
+
+ensureAdminBranchDefaultSchema();
 
 export function resolveAdminIdentity(companyId: string, candidate: string | undefined): AdminIdentity | null {
   const value = candidate?.trim() ?? "";
@@ -122,8 +142,8 @@ export function ensureDefaultBranch(companyId: string): BranchRow {
   const now = Date.now();
   const id = `branch_${companyId}_hq`;
   db.prepare(
-    `INSERT INTO company_branches (id, company_id, name, address, is_primary, created_at)
-     VALUES (?, ?, 'Head Office', '', 1, ?)`,
+    `INSERT INTO company_branches (id, company_id, name, address, latitude, longitude, is_primary, created_at)
+     VALUES (?, ?, 'Head Office', '', NULL, NULL, 1, ?)`,
   ).run(id, companyId, now);
 
   return db.prepare(`SELECT * FROM company_branches WHERE id = ?`).get(id) as unknown as BranchRow;
@@ -161,6 +181,8 @@ export function adminHasBranchAccess(companyId: string, adminId: string, branchI
 }
 
 export function setAdminBranchIds(companyId: string, adminId: string, branchIds: string[]) {
+  const previousDefault = getAdminDefaultBranchId(companyId, adminId);
+
   db.prepare(`DELETE FROM admin_branch_access WHERE company_id = ? AND admin_id = ?`).run(
     companyId,
     adminId,
@@ -168,14 +190,76 @@ export function setAdminBranchIds(companyId: string, adminId: string, branchIds:
 
   const validIds = new Set(listCompanyBranches(companyId).map((b) => b.id));
   const insert = db.prepare(
-    `INSERT INTO admin_branch_access (company_id, admin_id, branch_id, created_at) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO admin_branch_access (company_id, admin_id, branch_id, created_at, is_default)
+     VALUES (?, ?, ?, ?, ?)`,
   );
   const now = Date.now();
+  const nextDefault =
+    previousDefault && branchIds.includes(previousDefault)
+      ? previousDefault
+      : branchIds.find((branchId) => validIds.has(branchId)) ?? null;
 
   for (const branchId of branchIds) {
     if (!validIds.has(branchId)) continue;
-    insert.run(companyId, adminId, branchId, now);
+    insert.run(companyId, adminId, branchId, now, branchId === nextDefault ? 1 : 0);
   }
+}
+
+export function getAdminDefaultBranchId(companyId: string, adminId: string): string {
+  const row = db
+    .prepare(
+      `SELECT branch_id AS branchId FROM admin_branch_access
+       WHERE company_id = ? AND admin_id = ? AND is_default = 1
+       LIMIT 1`,
+    )
+    .get(companyId, adminId) as { branchId?: string } | undefined;
+
+  if (row?.branchId) return row.branchId;
+  return ensureDefaultBranch(companyId).id;
+}
+
+export function setAdminDefaultBranchId(
+  companyId: string,
+  adminId: string,
+  branchId: string,
+): { ok: true } | { ok: false; message: string } {
+  const trimmed = branchId.trim();
+  if (!trimmed) return { ok: false, message: "branchId is required" };
+
+  const validIds = new Set(listCompanyBranches(companyId).map((b) => b.id));
+  if (!validIds.has(trimmed)) return { ok: false, message: "Branch not found." };
+
+  if (adminId !== "owner") {
+    const allowed = getAdminBranchIds(companyId, adminId);
+    if (!allowed.includes(trimmed)) {
+      return { ok: false, message: "You do not have access to that branch." };
+    }
+  }
+
+  db.prepare(`UPDATE admin_branch_access SET is_default = 0 WHERE company_id = ? AND admin_id = ?`).run(
+    companyId,
+    adminId,
+  );
+
+  const existing = db
+    .prepare(
+      `SELECT branch_id FROM admin_branch_access WHERE company_id = ? AND admin_id = ? AND branch_id = ?`,
+    )
+    .get(companyId, adminId, trimmed) as { branch_id?: string } | undefined;
+
+  const now = Date.now();
+  if (existing) {
+    db.prepare(
+      `UPDATE admin_branch_access SET is_default = 1 WHERE company_id = ? AND admin_id = ? AND branch_id = ?`,
+    ).run(companyId, adminId, trimmed);
+  } else {
+    db.prepare(
+      `INSERT INTO admin_branch_access (company_id, admin_id, branch_id, created_at, is_default)
+       VALUES (?, ?, ?, ?, 1)`,
+    ).run(companyId, adminId, trimmed, now);
+  }
+
+  return { ok: true };
 }
 
 export function branchToJson(row: BranchRow) {
@@ -184,9 +268,27 @@ export function branchToJson(row: BranchRow) {
     companyId: row.company_id,
     name: row.name,
     address: row.address,
+    latitude: row.latitude ?? null,
+    longitude: row.longitude ?? null,
     isPrimary: row.is_primary === 1,
     createdAtMillis: row.created_at,
   };
+}
+
+export function syncPrimaryBranchFromCompanyProfile(
+  companyId: string,
+  patch: { address?: string; latitude?: number | null; longitude?: number | null },
+) {
+  const primary = ensureDefaultBranch(companyId);
+  const address = patch.address !== undefined ? patch.address.trim() : primary.address;
+  const latitude = patch.latitude !== undefined ? patch.latitude : primary.latitude;
+  const longitude = patch.longitude !== undefined ? patch.longitude : primary.longitude;
+
+  db.prepare(
+    `UPDATE company_branches
+     SET address = ?, latitude = ?, longitude = ?
+     WHERE company_id = ? AND id = ?`,
+  ).run(address, latitude, longitude, companyId, primary.id);
 }
 
 export function adminToJson(admin: AdminRow, branchIds?: string[]) {
