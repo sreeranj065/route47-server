@@ -211,6 +211,15 @@ export function notifyActivityEvents(
         { driverId, routeRunId: routeId, stopId, eventType },
         { priority: "high", branchId: driverBranchId(companyId, driverId) },
       );
+    } else if (eventType.includes("SPEEDING")) {
+      notifyAllAdmins(
+        companyId,
+        NOTIFICATION_TYPES.ISSUE_REPORTED,
+        "Speeding detected",
+        `${driverName} exceeded the speed limit.`,
+        { driverId, routeRunId: routeId, stopId, eventType },
+        { priority: "high", branchId: driverBranchId(companyId, driverId) },
+      );
     }
   }
 }

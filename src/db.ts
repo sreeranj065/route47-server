@@ -203,6 +203,27 @@ function ensureGeofenceLinkageColumns() {
 
 ensureGeofenceLinkageColumns();
 
+function ensureDailyReportAnalyticsColumns() {
+  const columns = db
+    .prepare(`PRAGMA table_info(daily_reports)`)
+    .all() as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+
+  if (!names.has("delivery_stops")) {
+    db.exec(`ALTER TABLE daily_reports ADD COLUMN delivery_stops INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!names.has("pickup_stops")) {
+    db.exec(`ALTER TABLE daily_reports ADD COLUMN pickup_stops INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!names.has("customer_deliveries_json")) {
+    db.exec(
+      `ALTER TABLE daily_reports ADD COLUMN customer_deliveries_json TEXT NOT NULL DEFAULT '{}'`,
+    );
+  }
+}
+
+ensureDailyReportAnalyticsColumns();
+
 function ensureTeamAndNotificationTables() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS admins (
@@ -388,6 +409,9 @@ export type DailyReportRow = {
   receipt_count: number;
   total_distance_meters: number;
   total_drive_time_seconds: number;
+  delivery_stops: number;
+  pickup_stops: number;
+  customer_deliveries_json: string;
   created_at: number;
   received_at: number;
 };
@@ -428,6 +452,23 @@ export function geofenceToJson(row: GeofenceRow) {
   };
 }
 
+export function parseCustomerDeliveriesJson(raw: string | undefined): Record<string, number> {
+  try {
+    const parsed = JSON.parse(raw || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const count = Number(value);
+      if (key.trim() && Number.isFinite(count) && count > 0) {
+        result[key.trim()] = count;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 export function dailyReportToJson(row: DailyReportRow) {
   return {
     reportId: row.report_id,
@@ -445,6 +486,9 @@ export function dailyReportToJson(row: DailyReportRow) {
     receiptCount: row.receipt_count,
     totalDistanceMeters: row.total_distance_meters,
     totalDriveTimeSeconds: row.total_drive_time_seconds,
+    deliveryStops: row.delivery_stops ?? 0,
+    pickupStops: row.pickup_stops ?? 0,
+    customerDeliveries: parseCustomerDeliveriesJson(row.customer_deliveries_json),
     createdAtMillis: row.created_at,
     receivedAtMillis: row.received_at,
   };

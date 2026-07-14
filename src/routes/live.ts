@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { hasAdminAccess } from "../lib/route-admin.js";
 import { companyRoutes } from "./auth.js";
 import { db, dailyReportToJson, type DailyReportRow } from "../db.js";
-import { applyStopProgressToLatestPlan } from "../lib/route-plan-sync.js";
+import { applyStopProgressToLatestPlan, summarizeRoutePlanStops } from "../lib/route-plan-sync.js";
 import {
   filterRowsByAccessibleDrivers,
 } from "../lib/branch-filter.js";
@@ -318,13 +318,16 @@ companyRoutes.post("/route47/companies/:companyId/reports/daily", async (c) => {
     .digest("hex")
     .slice(0, 16)}`;
 
+  const stopSummary = summarizeRoutePlanStops(companyId, driverId, routeRunId);
+
   db.prepare(
     `INSERT INTO daily_reports (
       report_id, company_id, driver_id, driver_device_id, vehicle_id, route_run_id,
       route_date_iso, total_stops, completed_stops, skipped_stops, failed_stops,
       proof_count, receipt_count, total_distance_meters, total_drive_time_seconds,
+      delivery_stops, pickup_stops, customer_deliveries_json,
       created_at, received_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company_id, driver_id, route_run_id, route_date_iso) DO UPDATE SET
       driver_device_id = excluded.driver_device_id,
       vehicle_id = excluded.vehicle_id,
@@ -336,6 +339,9 @@ companyRoutes.post("/route47/companies/:companyId/reports/daily", async (c) => {
       receipt_count = excluded.receipt_count,
       total_distance_meters = excluded.total_distance_meters,
       total_drive_time_seconds = excluded.total_drive_time_seconds,
+      delivery_stops = excluded.delivery_stops,
+      pickup_stops = excluded.pickup_stops,
+      customer_deliveries_json = excluded.customer_deliveries_json,
       created_at = excluded.created_at,
       received_at = excluded.received_at`
   ).run(
@@ -354,6 +360,9 @@ companyRoutes.post("/route47/companies/:companyId/reports/daily", async (c) => {
     Number(body.receiptCount ?? 0),
     Number(body.totalDistanceMeters ?? 0),
     Number(body.totalDriveTimeSeconds ?? 0),
+    stopSummary.deliveryStops,
+    stopSummary.pickupStops,
+    JSON.stringify(stopSummary.customerDeliveries),
     createdAt,
     now,
   );
@@ -407,6 +416,7 @@ companyRoutes.get("/route47/companies/:companyId/reports/daily", (c) => {
       `SELECT report_id, company_id, driver_id, driver_device_id, vehicle_id, route_run_id,
               route_date_iso, total_stops, completed_stops, skipped_stops, failed_stops,
               proof_count, receipt_count, total_distance_meters, total_drive_time_seconds,
+              delivery_stops, pickup_stops, customer_deliveries_json,
               created_at, received_at
        FROM daily_reports
        WHERE ${conditions.join(" AND ")}

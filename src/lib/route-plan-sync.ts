@@ -284,3 +284,92 @@ export function driverStatus(companyId: string, driverId: string): string {
   if (delayed) return "Delayed";
   return "Offline";
 }
+
+export type RoutePlanStopSummary = {
+  customerDeliveries: Record<string, number>;
+  deliveryStops: number;
+  pickupStops: number;
+  completedDeliveries: number;
+};
+
+function routePlanForReport(
+  companyId: string,
+  driverId: string,
+  routeRunId: string,
+): RoutePlanRow | undefined {
+  if (routeRunId) {
+    const exact = db
+      .prepare(
+        `SELECT route_run_id, company_id, driver_id, vehicle_id, route_date_iso, status, stops_json, published_at, updated_at
+         FROM route_plans
+         WHERE company_id = ? AND route_run_id = ?`,
+      )
+      .get(companyId, routeRunId) as RoutePlanRow | undefined;
+    if (exact) return exact;
+  }
+
+  if (driverId) {
+    return latestRoutePlan(companyId, driverId);
+  }
+
+  return undefined;
+}
+
+export function summarizeRoutePlanStops(
+  companyId: string,
+  driverId: string,
+  routeRunId: string,
+): RoutePlanStopSummary {
+  const plan = routePlanForReport(companyId, driverId, routeRunId);
+  if (!plan) {
+    return {
+      customerDeliveries: {},
+      deliveryStops: 0,
+      pickupStops: 0,
+      completedDeliveries: 0,
+    };
+  }
+
+  try {
+    const stops = JSON.parse(plan.stops_json || "[]") as Array<{
+      stopId?: string;
+      stopType?: string;
+      customerName?: string;
+      status?: string;
+      stopStatus?: string;
+      notes?: string;
+    }>;
+    const progressByStop = latestProgressByStop(companyId, driverId, plan.route_run_id);
+    const customerDeliveries: Record<string, number> = {};
+    let deliveryStops = 0;
+    let pickupStops = 0;
+    let completedDeliveries = 0;
+
+    for (const stop of stops) {
+      const stopType = String(stop.stopType ?? "Delivery").trim().toLowerCase();
+      const stopId = String(stop.stopId ?? "").trim();
+      const fromProgress = stopId ? progressByStop.get(stopId) : undefined;
+      const status = fromProgress || readStopStatusFromJson(stop);
+      const isDelivery = stopType === "delivery" || stopType === "";
+      const isPickup = stopType === "pickup";
+
+      if (isPickup) pickupStops++;
+      else if (isDelivery) deliveryStops++;
+
+      if (isDelivery && status === "Completed") {
+        completedDeliveries++;
+        const customer = String(stop.customerName ?? "").trim() || "Unknown";
+        customerDeliveries[customer] = (customerDeliveries[customer] ?? 0) + 1;
+      }
+    }
+
+    return { customerDeliveries, deliveryStops, pickupStops, completedDeliveries };
+  } catch {
+    return {
+      customerDeliveries: {},
+      deliveryStops: 0,
+      pickupStops: 0,
+      completedDeliveries: 0,
+    };
+  }
+}
