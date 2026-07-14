@@ -122,6 +122,8 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
 });
 
 const LIVE_LOCATION_MAX_AGE_MS = 1000 * 60 * 30;
+/** Admin live map: only return rows fresh enough for ~20s presence expiry on the client. */
+const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 22_000;
 
 function latestHeartbeats(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
   const cutoff = Date.now() - maxAgeMs;
@@ -273,7 +275,11 @@ function scopedDriverLocations(
 
 companyRoutes.get("/route47/companies/:companyId/admin/live-locations", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = scopedDriverLocations(companyId, c.get("admin"));
+  const locations = scopedDriverLocations(
+    companyId,
+    c.get("admin"),
+    ADMIN_LIVE_PRESENCE_MAX_AGE_MS,
+  );
 
   return c.json({
     message: `${locations.length} live location(s).`,
@@ -285,7 +291,11 @@ companyRoutes.get("/route47/companies/:companyId/admin/live-locations", (c) => {
 
 companyRoutes.get("/route47/companies/:companyId/admin/live-updates", (c) => {
   const companyId = c.req.param("companyId");
-  const locations = scopedDriverLocations(companyId, c.get("admin"));
+  const locations = scopedDriverLocations(
+    companyId,
+    c.get("admin"),
+    ADMIN_LIVE_PRESENCE_MAX_AGE_MS,
+  );
 
   return c.json({
     message: `${locations.length} live update(s).`,
