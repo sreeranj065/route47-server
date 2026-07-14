@@ -179,26 +179,80 @@ function mergeLatestLocations(
   heartbeats: Array<Record<string, unknown>>,
   progress: Array<Record<string, unknown>>,
 ) {
-  const byDriver = new Map<string, Record<string, unknown>>();
-
-  for (const row of progress) {
-    const driverId = String(row.driverId ?? "").trim();
-    if (!driverId) continue;
-    byDriver.set(driverId, row);
-  }
+  const heartbeatByDriver = new Map<string, Record<string, unknown>>();
+  const progressByDriver = new Map<string, Record<string, unknown>>();
 
   for (const row of heartbeats) {
     const driverId = String(row.driverId ?? "").trim();
-    if (!driverId) continue;
-    const existing = byDriver.get(driverId);
-    const rowTime = Number(row.createdAtMillis ?? 0);
-    const existingTime = Number(existing?.createdAtMillis ?? 0);
-    if (!existing || rowTime >= existingTime) {
-      byDriver.set(driverId, row);
-    }
+    if (driverId) heartbeatByDriver.set(driverId, row);
   }
 
-  return [...byDriver.values()];
+  for (const row of progress) {
+    const driverId = String(row.driverId ?? "").trim();
+    if (driverId) progressByDriver.set(driverId, row);
+  }
+
+  const merged: Array<Record<string, unknown>> = [];
+  const driverIds = new Set([...heartbeatByDriver.keys(), ...progressByDriver.keys()]);
+
+  for (const driverId of driverIds) {
+    const heartbeat = heartbeatByDriver.get(driverId);
+    const progressRow = progressByDriver.get(driverId);
+
+    if (!heartbeat && progressRow) {
+      merged.push({ ...progressRow });
+      continue;
+    }
+    if (heartbeat && !progressRow) {
+      merged.push({ ...heartbeat });
+      continue;
+    }
+    if (!heartbeat || !progressRow) continue;
+
+    const heartbeatTime = Number(heartbeat.createdAtMillis ?? 0);
+    const progressTime = Number(progressRow.createdAtMillis ?? 0);
+    const winner = heartbeatTime >= progressTime ? { ...heartbeat } : { ...progressRow };
+    const other = heartbeatTime >= progressTime ? progressRow : heartbeat;
+    const timeGapMs = Math.abs(heartbeatTime - progressTime);
+
+    if (winner.speedKmh == null && other.speedKmh != null) {
+      winner.speedKmh = other.speedKmh;
+    }
+    if (!winner.headingDegrees && other.headingDegrees != null) {
+      winner.headingDegrees = other.headingDegrees;
+    }
+    if (!String(winner.routeStatus ?? "").trim() && String(other.routeStatus ?? "").trim()) {
+      winner.routeStatus = other.routeStatus;
+    }
+    if (!String(winner.routeRunId ?? "").trim() && String(other.routeRunId ?? "").trim()) {
+      winner.routeRunId = other.routeRunId;
+    }
+    if (!String(winner.activeStopId ?? "").trim() && String(other.activeStopId ?? "").trim()) {
+      winner.activeStopId = other.activeStopId;
+    }
+    if (winner.batteryLevelPercent == null && other.batteryLevelPercent != null) {
+      winner.batteryLevelPercent = other.batteryLevelPercent;
+    }
+
+    // Route progress often wins on timestamp but drops speed — keep recent heartbeat motion fields.
+    if (
+      winner.speedKmh == null &&
+      heartbeat.speedKmh != null &&
+      timeGapMs <= 120_000
+    ) {
+      winner.speedKmh = heartbeat.speedKmh;
+      if (winner.headingDegrees == null && heartbeat.headingDegrees != null) {
+        winner.headingDegrees = heartbeat.headingDegrees;
+      }
+      if (!String(winner.routeStatus ?? "").trim() && String(heartbeat.routeStatus ?? "").trim()) {
+        winner.routeStatus = heartbeat.routeStatus;
+      }
+    }
+
+    merged.push(winner);
+  }
+
+  return merged;
 }
 
 function latestDriverLocations(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
