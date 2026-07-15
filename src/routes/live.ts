@@ -122,8 +122,8 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
 });
 
 const LIVE_LOCATION_MAX_AGE_MS = 1000 * 60 * 30;
-/** Admin live map: only return rows fresh enough for ~20s presence expiry on the client. */
-const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 22_000;
+/** Admin live map: return rows fresh enough for driver heartbeat cadence (10s stopped, up to 120s battery). */
+const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 130_000;
 
 function latestHeartbeats(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
   const cutoff = Date.now() - maxAgeMs;
