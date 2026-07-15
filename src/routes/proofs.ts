@@ -445,11 +445,15 @@ companyRoutes.get("/route47/companies/:companyId/proofs/:proofId/file", (c) => {
       : mimeFromExt || "application/octet-stream";
 
   const data = fs.readFileSync(row.filePath);
+  const downloadName = String(row.fileName || `${proofId}.pdf`).replace(/[\r\n"]/g, "");
+  const encodedName = encodeURIComponent(downloadName);
   return new Response(data, {
     headers: {
       "Content-Type": mimeType,
-      "Content-Disposition": `inline; filename="${row.fileName}"`,
+      // ASCII filename + RFC 5987 filename* so browsers/WebViews keep the real extension.
+      "Content-Disposition": `inline; filename="${downloadName.replace(/[^\x20-\x7E]/g, "_")}"; filename*=UTF-8''${encodedName}`,
       "Cache-Control": "private, max-age=60",
+      "Access-Control-Expose-Headers": "Content-Type, Content-Disposition",
     },
   });
 });

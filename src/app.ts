@@ -60,7 +60,12 @@ app.use(
       "X-Route47-Admin-Key",
       "X-Client",
     ],
-    exposeHeaders: ["X-Route47-Server-Mode", "X-Route47-Server-Name"],
+    exposeHeaders: [
+      "X-Route47-Server-Mode",
+      "X-Route47-Server-Name",
+      "Content-Type",
+      "Content-Disposition",
+    ],
   })
 );
 
