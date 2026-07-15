@@ -66,6 +66,19 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   const buffer = Buffer.from(await file.arrayBuffer());
   fs.writeFileSync(storedPath, buffer);
 
+  const mimeFromName = (() => {
+    const ext = path.extname(storedName).toLowerCase();
+    if (ext === ".pdf") return "application/pdf";
+    if (ext === ".png") return "image/png";
+    if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+    if (ext === ".webp") return "image/webp";
+    return "";
+  })();
+  const mimeType =
+    file.type && file.type !== "application/octet-stream"
+      ? file.type
+      : mimeFromName || "application/octet-stream";
+
   db.prepare(
     `INSERT INTO proofs (
       proof_id, company_id, driver_id, driver_device_id, vehicle_id, route_run_id, stop_id,
@@ -96,7 +109,7 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     address,
     storedName,
     storedPath,
-    file.type || "application/octet-stream",
+    mimeType,
     createdAtMillis,
     branchId
   );
@@ -375,14 +388,22 @@ companyRoutes.get("/route47/companies/:companyId/proofs/:proofId/file", (c) => {
   const companyId = c.req.param("companyId");
   const proofId = c.req.param("proofId");
   const sessionDriverId = c.get("driverId")?.trim() ?? "";
+  const admin = c.get("admin");
 
   const row = db
     .prepare(
-      `SELECT file_path AS filePath, mime_type AS mimeType, file_name AS fileName, driver_id AS driverId
+      `SELECT file_path AS filePath, mime_type AS mimeType, file_name AS fileName,
+              driver_id AS driverId, branch_id AS branchId
        FROM proofs WHERE company_id = ? AND proof_id = ?`
     )
     .get(companyId, proofId) as
-    | { filePath: string; mimeType: string; fileName: string; driverId: string }
+    | {
+        filePath: string;
+        mimeType: string;
+        fileName: string;
+        driverId: string;
+        branchId?: string;
+      }
     | undefined;
 
   if (!row || !fs.existsSync(row.filePath)) {
@@ -392,22 +413,43 @@ companyRoutes.get("/route47/companies/:companyId/proofs/:proofId/file", (c) => {
   if (sessionDriverId && row.driverId !== sessionDriverId) {
     return c.json({ message: "Proof file not found." }, 404);
   }
-  if (!sessionDriverId && !adminCanAccessDriver(companyId, c.get("admin"), row.driverId)) {
-    // A document explicitly shared to one of the admin's branches stays downloadable.
-    const allowedBranches = getAdminAllowedBranchIds(companyId, c.get("admin"));
+  if (!sessionDriverId) {
+    const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
+    const driverAllowed = adminCanAccessDriver(companyId, admin, row.driverId);
+    const branchId = String(row.branchId ?? "").trim();
+    const branchAllowed =
+      allowedBranches === null ||
+      (branchId !== "" && allowedBranches.includes(branchId));
     const shared =
       allowedBranches !== null &&
       sharedResourceIds(companyId, "document", allowedBranches).includes(proofId);
-    if (!shared) {
+    if (!driverAllowed && !branchAllowed && !shared) {
       return c.json({ message: "Proof file not found." }, 404);
     }
   }
 
+  const ext = path.extname(row.fileName || row.filePath).toLowerCase();
+  const mimeFromExt =
+    ext === ".pdf"
+      ? "application/pdf"
+      : ext === ".png"
+        ? "image/png"
+        : ext === ".jpg" || ext === ".jpeg"
+          ? "image/jpeg"
+          : ext === ".webp"
+            ? "image/webp"
+            : "";
+  const mimeType =
+    row.mimeType && row.mimeType !== "application/octet-stream"
+      ? row.mimeType
+      : mimeFromExt || "application/octet-stream";
+
   const data = fs.readFileSync(row.filePath);
   return new Response(data, {
     headers: {
-      "Content-Type": row.mimeType || "application/octet-stream",
-      "Content-Disposition": `inline; filename=\"${row.fileName}\"`,
+      "Content-Type": mimeType,
+      "Content-Disposition": `inline; filename="${row.fileName}"`,
+      "Cache-Control": "private, max-age=60",
     },
   });
 });
