@@ -10,6 +10,7 @@ import {
 import {
   canonicalRouteRunId,
   deleteDuplicateRoutePlansForDriverDay,
+  mergeRoutePlanStops,
 } from "../lib/route-plan-sync.js";
 import {
   branchColumnFilterSql,
@@ -179,7 +180,17 @@ companyRoutes.post("/route47/companies/:companyId/admin-route-plans", async (c) 
       .get(companyId, routeRunId) as { driverId?: string; stopsJson?: string } | undefined;
 
     const incomingStops = Array.isArray(plan.stops) ? plan.stops : [];
-    const stops = incomingStops;
+    let stops = incomingStops;
+    if (existing?.stopsJson) {
+      try {
+        const existingStops = JSON.parse(existing.stopsJson || "[]");
+        if (Array.isArray(existingStops) && existingStops.length > 0) {
+          stops = mergeRoutePlanStops(existingStops, incomingStops, true);
+        }
+      } catch {
+        /* keep incoming only if existing JSON is corrupt */
+      }
+    }
 
     upsert.run(
       routeRunId,
