@@ -240,6 +240,21 @@ function mergeLatestLocations(
     const other = heartbeatTime >= progressTime ? progressRow : heartbeat;
     const timeGapMs = Math.abs(heartbeatTime - progressTime);
 
+    // Live map must match the driver GPS stream. Prefer heartbeat lat/lng whenever
+    // the heartbeat has usable coordinates, even if a progress event is newer.
+    const heartbeatLat = Number(heartbeat.latitude);
+    const heartbeatLng = Number(heartbeat.longitude);
+    const heartbeatHasGps =
+      Number.isFinite(heartbeatLat) &&
+      Number.isFinite(heartbeatLng) &&
+      !(heartbeatLat === 0 && heartbeatLng === 0);
+    if (heartbeatHasGps && timeGapMs <= 120_000) {
+      winner.latitude = heartbeat.latitude;
+      winner.longitude = heartbeat.longitude;
+      if (heartbeat.speedKmh != null) winner.speedKmh = heartbeat.speedKmh;
+      if (heartbeat.headingDegrees != null) winner.headingDegrees = heartbeat.headingDegrees;
+    }
+
     if (winner.speedKmh == null && other.speedKmh != null) {
       winner.speedKmh = other.speedKmh;
     }
