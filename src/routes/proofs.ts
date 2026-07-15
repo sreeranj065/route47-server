@@ -6,6 +6,7 @@ import { db } from "../db.js";
 import { getDriverBranchId } from "../branch-storage.js";
 import {
   adminCanAccessDriver,
+  branchColumnFilterSql,
   driverBranchFilterSql,
   getAdminAllowedBranchIds,
   sharedResourceIds,
@@ -138,16 +139,20 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
   } else if (admin) {
     const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
     if (allowedBranches !== null) {
-      const branchFilter = driverBranchFilterSql(companyId, admin);
+      const driverFilter = driverBranchFilterSql(companyId, admin);
+      const branchFilter = branchColumnFilterSql(companyId, admin, "branch_id");
       // Documents explicitly shared to this admin's branches stay visible.
       const sharedProofIds = sharedResourceIds(companyId, "document", allowedBranches);
+      // Keep proofs visible if either the driver's current branch matches OR
+      // the proof was uploaded under an allowed branch_id (driver moves / orphans).
+      const visibility = `(1=1${driverFilter.clause} OR 1=1${branchFilter.clause})`;
       if (sharedProofIds.length > 0) {
         const placeholders = sharedProofIds.map(() => "?").join(", ");
-        conditions.push(`(1=1${branchFilter.clause} OR proof_id IN (${placeholders}))`);
-        params.push(...branchFilter.params, ...sharedProofIds);
+        conditions.push(`(${visibility} OR proof_id IN (${placeholders}))`);
+        params.push(...driverFilter.params, ...branchFilter.params, ...sharedProofIds);
       } else {
-        conditions.push(`1=1${branchFilter.clause}`);
-        params.push(...branchFilter.params);
+        conditions.push(`(${visibility})`);
+        params.push(...driverFilter.params, ...branchFilter.params);
       }
     }
   }
