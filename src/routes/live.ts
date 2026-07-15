@@ -122,7 +122,7 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
 });
 
 const LIVE_LOCATION_MAX_AGE_MS = 1000 * 60 * 30;
-/** Admin live map: return rows fresh enough for driver heartbeat cadence (10s stopped, up to 120s battery). */
+/** Admin live map: return rows fresh enough for driver heartbeat cadence (~2s during active route). */
 const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 130_000;
 
 function latestHeartbeats(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
