@@ -12,17 +12,37 @@ export function mergeRoutePlanStops(
   incoming: unknown[],
   incomingWinsOnConflict: boolean,
 ): unknown[] {
+  const stopIdOf = (stop: unknown): string =>
+    String((stop as Record<string, unknown>).stopId ?? "").trim();
+
+  const existingIds = new Set(existing.map(stopIdOf).filter(Boolean));
+  const incomingIds = new Set(incoming.map(stopIdOf).filter(Boolean));
+  const hasNewStops = [...incomingIds].some((id) => !existingIds.has(id));
+  const hasRemovals = [...existingIds].some((id) => !incomingIds.has(id));
+
+  // Admin sends the full current list. Pure deletes (subset, no new ids) must drop
+  // removed stops — the old merge-only logic kept them forever.
+  if (incomingWinsOnConflict && hasRemovals && !hasNewStops) {
+    return applyIncomingStops(existing, incoming);
+  }
+
+  // Adds/updates with a complete list, or first publish with no prior stops.
+  if (incomingWinsOnConflict && !hasRemovals) {
+    return applyIncomingStops(existing, incoming);
+  }
+
+  // Race: new stop(s) plus missing prior ids — keep orphans from existing.
   const byId = new Map<string, Record<string, unknown>>();
 
   for (const stop of existing) {
     const record = stop as Record<string, unknown>;
-    const id = String(record.stopId ?? "").trim();
+    const id = stopIdOf(stop);
     if (id) byId.set(id, record);
   }
 
   for (const stop of incoming) {
     const record = stop as Record<string, unknown>;
-    const id = String(record.stopId ?? "").trim();
+    const id = stopIdOf(stop);
     if (!id) continue;
     if (!byId.has(id) || incomingWinsOnConflict) {
       byId.set(id, record);
@@ -33,7 +53,7 @@ export function mergeRoutePlanStops(
   const seen = new Set<string>();
 
   for (const stop of existing) {
-    const id = String((stop as Record<string, unknown>).stopId ?? "").trim();
+    const id = stopIdOf(stop);
     if (id && byId.has(id) && !seen.has(id)) {
       result.push(byId.get(id));
       seen.add(id);
@@ -41,7 +61,7 @@ export function mergeRoutePlanStops(
   }
 
   for (const stop of incoming) {
-    const id = String((stop as Record<string, unknown>).stopId ?? "").trim();
+    const id = stopIdOf(stop);
     if (id && !seen.has(id)) {
       result.push(byId.get(id) ?? stop);
       seen.add(id);
@@ -49,6 +69,22 @@ export function mergeRoutePlanStops(
   }
 
   return result;
+}
+
+function applyIncomingStops(existing: unknown[], incoming: unknown[]): unknown[] {
+  const stopIdOf = (stop: unknown): string =>
+    String((stop as Record<string, unknown>).stopId ?? "").trim();
+  const existingById = new Map<string, Record<string, unknown>>();
+  for (const stop of existing) {
+    const id = stopIdOf(stop);
+    if (id) existingById.set(id, stop as Record<string, unknown>);
+  }
+
+  return incoming.map((stop) => {
+    const id = stopIdOf(stop);
+    const previous = id ? existingById.get(id) : undefined;
+    return previous ? { ...previous, ...(stop as Record<string, unknown>) } : stop;
+  });
 }
 
 export function deleteDuplicateRoutePlansForDriverDay(
