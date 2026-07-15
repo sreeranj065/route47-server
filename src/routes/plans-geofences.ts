@@ -324,13 +324,12 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
   const routePlans = routePlanRows.map(routePlanToJson);
 
   const driverBranchId = sessionDriverId ? getDriverBranchId(companyId, sessionDriverId) : "";
-  const geofenceConditions = [
-    "company_id = ?",
-    "approval_status = 'approved'",
-    sessionDriverId
-      ? `AND COALESCE(NULLIF(branch_id, ''), ?) = ?`
-      : geofenceBranchFilter.clause.replace(/^ AND /, "AND "),
-  ].filter(Boolean);
+  const geofenceConditions: string[] = ["company_id = ?", "approval_status = 'approved'"];
+  if (sessionDriverId) {
+    geofenceConditions.push("COALESCE(NULLIF(branch_id, ''), ?) = ?");
+  } else if (geofenceBranchFilter.clause) {
+    geofenceConditions.push(geofenceBranchFilter.clause.trim().replace(/^AND\s+/i, ""));
+  }
 
   const geofenceParams: Array<string | number> = [companyId];
   if (sessionDriverId) {
@@ -342,7 +341,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
   const geofenceRows = db
     .prepare(
       `${GEOFENCE_SELECT}
-       WHERE ${geofenceConditions.join(" ")}
+       WHERE ${geofenceConditions.join(" AND ")}
        ORDER BY updated_at DESC`,
     )
     .all(...geofenceParams) as GeofenceRow[];
