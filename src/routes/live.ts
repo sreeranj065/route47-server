@@ -40,7 +40,25 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
     return c.json({ message: "Heartbeat body must be valid JSON." }, 400);
   }
 
-  const createdAt = body.createdAtMillis ?? Date.now();
+  // Presence freshness must use server receive time. Device clocks are often
+  // skewed; using createdAtMillis from the phone made rows look 2+ minutes old
+  // on the admin map and caused pins to flash then vanish within ~1s.
+  const receivedAt = Date.now();
+  const clientCreatedAt =
+    typeof body.createdAtMillis === "number" && Number.isFinite(body.createdAtMillis)
+      ? body.createdAtMillis
+      : receivedAt;
+
+  const latitude =
+    typeof body.latitude === "number" && Number.isFinite(body.latitude) ? body.latitude : null;
+  const longitude =
+    typeof body.longitude === "number" && Number.isFinite(body.longitude) ? body.longitude : null;
+  const usableCoords =
+    latitude != null &&
+    longitude != null &&
+    !(latitude === 0 && longitude === 0) &&
+    Math.abs(latitude) <= 90 &&
+    Math.abs(longitude) <= 180;
 
   db.prepare(
     `INSERT INTO heartbeats (
@@ -56,8 +74,8 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
     body.vehicleId ?? c.get("vehicleId"),
     body.routeRunId ?? "",
     body.activeStopId ?? "",
-    body.latitude ?? null,
-    body.longitude ?? null,
+    usableCoords ? latitude : null,
+    usableCoords ? longitude : null,
     body.batteryLevelPercent ?? null,
     body.networkStatus ?? "unknown",
     body.speedKmh ?? null,
@@ -66,10 +84,13 @@ companyRoutes.post("/route47/companies/:companyId/devices/heartbeat", async (c) 
     body.signalLevel ?? null,
     body.appVersionName ?? "",
     body.appBuildType ?? "",
-    createdAt
+    receivedAt
   );
 
-  return c.json({ message: "Device heartbeat stored." });
+  // clientCreatedAt kept for diagnostics only (skew debugging).
+  void clientCreatedAt;
+
+  return c.json({ message: "Device heartbeat stored.", receivedAtMillis: receivedAt });
 });
 
 companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) => {
@@ -108,7 +129,7 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
     body.message ?? "",
     body.latitude ?? null,
     body.longitude ?? null,
-    body.createdAtMillis ?? Date.now()
+    Date.now()
   );
 
   const driverId = String(body.driverId ?? c.get("driverId") ?? "").trim();
@@ -122,8 +143,8 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
 });
 
 const LIVE_LOCATION_MAX_AGE_MS = 1000 * 60 * 30;
-/** Admin live map: return rows fresh enough for driver heartbeat cadence (~2s during active route). */
-const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 130_000;
+/** Admin live map: keep last good fix long enough for brief GPS/network gaps. */
+const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 1000 * 60 * 10;
 
 function latestHeartbeats(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
   const cutoff = Date.now() - maxAgeMs;
@@ -144,6 +165,7 @@ function latestHeartbeats(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS
            AND created_at >= ?
            AND latitude IS NOT NULL
            AND longitude IS NOT NULL
+           AND NOT (latitude = 0 AND longitude = 0)
          GROUP BY driver_id
        ) latest ON latest.driver_id = h.driver_id AND latest.max_created = h.created_at
        WHERE h.company_id = ?`
@@ -170,6 +192,7 @@ function latestProgressLocations(companyId: string, maxAgeMs = LIVE_LOCATION_MAX
            AND created_at >= ?
            AND latitude IS NOT NULL
            AND longitude IS NOT NULL
+           AND NOT (latitude = 0 AND longitude = 0)
          GROUP BY driver_id
        ) latest ON latest.driver_id = p.driver_id AND latest.max_created = p.created_at
        WHERE p.company_id = ?`
