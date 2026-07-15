@@ -223,15 +223,37 @@ function mergeLatestLocations(
     if (!winner.headingDegrees && other.headingDegrees != null) {
       winner.headingDegrees = other.headingDegrees;
     }
-    if (!String(winner.routeStatus ?? "").trim() && String(other.routeStatus ?? "").trim()) {
+
+    const winnerRouteStatus = String(winner.routeStatus ?? "").trim().toLowerCase();
+    const otherRouteStatus = String(other.routeStatus ?? "").trim().toLowerCase();
+    const winnerActive =
+      Boolean(String(winner.routeRunId ?? "").trim()) ||
+      (winnerRouteStatus !== "" && winnerRouteStatus !== "idle");
+    const otherActive =
+      Boolean(String(other.routeRunId ?? "").trim()) ||
+      (otherRouteStatus !== "" && otherRouteStatus !== "idle");
+
+    // Prefer an active heartbeat/progress route status over a blank/idle peer.
+    if (!winnerActive && otherActive) {
       winner.routeStatus = other.routeStatus;
+      if (!String(winner.routeRunId ?? "").trim() && String(other.routeRunId ?? "").trim()) {
+        winner.routeRunId = other.routeRunId;
+      }
+      if (!String(winner.activeStopId ?? "").trim() && String(other.activeStopId ?? "").trim()) {
+        winner.activeStopId = other.activeStopId;
+      }
+    } else {
+      if (!String(winner.routeStatus ?? "").trim() && String(other.routeStatus ?? "").trim()) {
+        winner.routeStatus = other.routeStatus;
+      }
+      if (!String(winner.routeRunId ?? "").trim() && String(other.routeRunId ?? "").trim()) {
+        winner.routeRunId = other.routeRunId;
+      }
+      if (!String(winner.activeStopId ?? "").trim() && String(other.activeStopId ?? "").trim()) {
+        winner.activeStopId = other.activeStopId;
+      }
     }
-    if (!String(winner.routeRunId ?? "").trim() && String(other.routeRunId ?? "").trim()) {
-      winner.routeRunId = other.routeRunId;
-    }
-    if (!String(winner.activeStopId ?? "").trim() && String(other.activeStopId ?? "").trim()) {
-      winner.activeStopId = other.activeStopId;
-    }
+
     if (winner.batteryLevelPercent == null && other.batteryLevelPercent != null) {
       winner.batteryLevelPercent = other.batteryLevelPercent;
     }
