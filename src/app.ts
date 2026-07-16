@@ -73,16 +73,20 @@ app.get("/health", (c) => c.json(buildHealthPayload()));
 
 // Minimal unauthenticated probe for hosting platforms (Render healthCheckPath,
 // Railway healthcheck). /health stays as the richer payload used by the apps.
-app.get("/healthz", (c) =>
-  c.json({
+app.get("/healthz", (c) => {
+  const selfUpdateSupported =
+    process.env.ROUTE47_SELF_UPDATE_ENABLED === "true" &&
+    (SERVER_CONFIG.hostingMode === "docker" || SERVER_CONFIG.hostingMode === "vps");
+  const deployHookConfigured = Boolean(process.env.ROUTE47_DEPLOY_HOOK_URL?.trim());
+  return c.json({
     ok: true,
     version: SERVER_CONFIG.version,
     hostingMode: SERVER_CONFIG.hostingMode,
-    selfUpdateSupported:
-      process.env.ROUTE47_SELF_UPDATE_ENABLED === "true" &&
-      (SERVER_CONFIG.hostingMode === "docker" || SERVER_CONFIG.hostingMode === "vps"),
-  })
-);
+    selfUpdateSupported,
+    deployHookConfigured,
+    inAppUpdateSupported: selfUpdateSupported || deployHookConfigured,
+  });
+});
 
 app.route("/", authRoutes);
 app.route("/", companyRoutes);

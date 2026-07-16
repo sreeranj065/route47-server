@@ -20,6 +20,7 @@ import {
 } from "../lib/admin-auth.js";
 import { adminCanAccessBranch, getAdminAllowedBranchIds } from "../lib/branch-filter.js";
 import { buildBranchStorageLayout } from "../branch-storage.js";
+import { buildStorageMetrics } from "../lib/storage-metrics.js";
 import { canInviteAnotherAdmin, ensureOrganizationLicense, licenseToJson } from "../lib/license.js";
 import { inviteCode, now, optionalString, rid, stringOr } from "../lib/util.js";
 import { companyRoutes } from "./auth.js";
@@ -306,6 +307,25 @@ companyRoutes.get("/route47/companies/:companyId/admin/storage-layout", (c) => {
   return c.json({
     message: "Branch storage layout ready.",
     layout: buildBranchStorageLayout(companyId, branchIds),
+  });
+});
+
+companyRoutes.get("/route47/companies/:companyId/admin/storage-metrics", (c) => {
+  const auth = requireAdmin(c);
+  if (!auth.ok) return c.json({ message: "Admin API key required." }, 401);
+
+  const companyId = c.req.param("companyId");
+  if (!getCompany(companyId)) return c.json({ message: "Company not found." }, 404);
+
+  const allowed = getAdminAllowedBranchIds(companyId, auth.admin);
+  const branchIds =
+    allowed === null
+      ? listCompanyBranches(companyId).map((row) => row.id)
+      : allowed;
+
+  return c.json({
+    message: "Storage metrics ready.",
+    metrics: buildStorageMetrics(companyId, branchIds),
   });
 });
 

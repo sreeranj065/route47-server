@@ -49,6 +49,7 @@ export function migrateFlatProofPaths(): number {
       proofId: row.proof_id,
       proofType: row.proof_type,
       routeRunId: row.route_run_id,
+      driverId: row.driver_id,
       originalFileName: row.file_name || `${row.proof_id}${path.extname(row.file_path) || ".bin"}`,
     });
 

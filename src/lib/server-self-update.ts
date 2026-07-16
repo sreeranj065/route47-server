@@ -27,19 +27,106 @@ function readHostingMode(): ServerHostingMode {
   return "development";
 }
 
+export function getDeployHookUrl(): string {
+  return process.env.ROUTE47_DEPLOY_HOOK_URL?.trim() || "";
+}
+
 export function getSelfUpdateConfig() {
   const hostingMode = readHostingMode();
   const enabled = process.env.ROUTE47_SELF_UPDATE_ENABLED === "true";
   const composeDir = process.env.ROUTE47_COMPOSE_DIR?.trim() || "";
   const updateCommand = process.env.ROUTE47_UPDATE_COMMAND?.trim() || "";
   const dockerHost = fs.existsSync("/var/run/docker.sock");
+  const deployHookUrl = getDeployHookUrl();
+  const deployHookConfigured = deployHookUrl.length > 0;
   const supported =
     enabled &&
     (hostingMode === "docker" || hostingMode === "vps") &&
     dockerHost &&
     (updateCommand.length > 0 || composeDir.length > 0);
 
-  return { hostingMode, enabled, composeDir, updateCommand, dockerHost, supported };
+  return {
+    hostingMode,
+    enabled,
+    composeDir,
+    updateCommand,
+    dockerHost,
+    supported,
+    deployHookConfigured,
+    /** True when Admin can trigger an in-app update (Docker self-update or PaaS deploy hook). */
+    inAppUpdateSupported: supported || deployHookConfigured,
+  };
+}
+
+/** Fire Railway/Render (or any) deploy hook URL. Does not expose the secret. */
+export async function triggerDeployHook(): Promise<{
+  started: boolean;
+  message: string;
+  status?: SelfUpdateStatus;
+}> {
+  const hookUrl = getDeployHookUrl();
+  if (!hookUrl) {
+    return {
+      started: false,
+      message:
+        "No deploy hook configured. Set ROUTE47_DEPLOY_HOOK_URL on the server (Railway/Render Deploy Hook), or enable Docker/VPS self-update.",
+    };
+  }
+
+  const current = readSelfUpdateState();
+  if (current.status === "running") {
+    return { started: false, message: "An update is already in progress." };
+  }
+
+  writeSelfUpdateState({
+    status: "running",
+    startedAt: Date.now(),
+    message: "Deploy hook triggered — waiting for the new version to come online…",
+  });
+
+  try {
+    const response = await fetch(hookUrl, { method: "POST" });
+    if (!response.ok) {
+      const body = (await response.text().catch(() => "")).trim().slice(0, 200);
+      writeSelfUpdateState({
+        status: "failed",
+        startedAt: current.startedAt ?? Date.now(),
+        completedAt: Date.now(),
+        message: `Deploy hook failed (HTTP ${response.status})${body ? `: ${body}` : ""}`,
+      });
+      return {
+        started: false,
+        message: `Deploy hook failed (HTTP ${response.status}). Check the hook URL in server env.`,
+        status: "failed",
+      };
+    }
+
+    writeSelfUpdateState({
+      status: "success",
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      message: "Deploy triggered. The host is rebuilding — wait for the new version, then refresh.",
+    });
+
+    return {
+      started: true,
+      message: "Deploy triggered via hosting hook. The server will restart with the new version shortly.",
+      status: "success",
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    writeSelfUpdateState({
+      status: "failed",
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      message: `Deploy hook request failed: ${detail}`,
+    });
+    return {
+      started: false,
+      message: `Could not reach deploy hook: ${detail}`,
+      status: "failed",
+    };
+  }
 }
 
 export function readSelfUpdateState(): SelfUpdateState {

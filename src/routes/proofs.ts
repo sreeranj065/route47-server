@@ -58,6 +58,7 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     proofId,
     proofType,
     routeRunId,
+    driverId,
     originalFileName: file.name || `${proofId}.bin`,
   });
 
@@ -256,6 +257,7 @@ function relocateProofFile(row: ProofRow, next: {
     proofId: row.proof_id,
     proofType: next.proofType,
     routeRunId: next.routeRunId,
+    driverId: row.driver_id,
     originalFileName: next.fileName,
   });
 

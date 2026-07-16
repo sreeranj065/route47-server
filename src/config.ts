@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildDiskHealthSummary } from "./lib/storage-metrics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +31,10 @@ function readHostingMode(): ServerHostingMode {
 
 export const SERVER_HOSTING_MODE = readHostingMode();
 
+export function isDeployHookConfigured(): boolean {
+  return Boolean(process.env.ROUTE47_DEPLOY_HOOK_URL?.trim());
+}
+
 export const SERVER_CONFIG = {
   name: "Route47 Customer Server",
   shortName: "route47-server",
@@ -43,17 +48,36 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
   const selfUpdateSupported =
     selfUpdateEnabled &&
     (SERVER_HOSTING_MODE === "docker" || SERVER_HOSTING_MODE === "vps");
+  const deployHookConfigured = isDeployHookConfigured();
+
+  let disk: Record<string, unknown> = {};
+  try {
+    disk = buildDiskHealthSummary();
+  } catch {
+    disk = {};
+  }
 
   return {
     ok: true,
     deploymentMode: SERVER_CONFIG.deploymentMode,
     hostingMode: SERVER_HOSTING_MODE,
     selfUpdateSupported,
+    deployHookConfigured,
+    inAppUpdateSupported: selfUpdateSupported || deployHookConfigured,
     serverName: SERVER_CONFIG.name,
     serverVersion: SERVER_VERSION,
     version: SERVER_VERSION,
     serverTimeMillis: Date.now(),
-    adminFeatures: ["drivers-roster", "drivers-create", "activity-sync", "admin-team", "push-notifications"],
+    adminFeatures: [
+      "drivers-roster",
+      "drivers-create",
+      "activity-sync",
+      "admin-team",
+      "push-notifications",
+      "storage-metrics",
+      "server-update",
+    ],
+    ...disk,
     ...extra,
   };
 }
