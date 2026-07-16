@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDiskHealthSummary } from "./lib/storage-metrics.js";
+import { getRunningCommitSha, getSelfUpdateConfig } from "./lib/server-self-update.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -52,12 +53,7 @@ export const SERVER_CONFIG = {
 } as const;
 
 export function buildHealthPayload(extra: Record<string, unknown> = {}) {
-  const selfUpdateEnabled = process.env.ROUTE47_SELF_UPDATE_ENABLED === "true";
-  const selfUpdateSupported =
-    selfUpdateEnabled &&
-    (SERVER_HOSTING_MODE === "docker" || SERVER_HOSTING_MODE === "vps");
-  const deployHookConfigured = isDeployHookConfigured();
-  const railwayConfigured = isRailwayUpdateConfigured();
+  const updateConfig = getSelfUpdateConfig();
 
   let disk: Record<string, unknown> = {};
   try {
@@ -69,14 +65,15 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
   return {
     ok: true,
     deploymentMode: SERVER_CONFIG.deploymentMode,
-    hostingMode: SERVER_HOSTING_MODE,
-    selfUpdateSupported,
-    deployHookConfigured,
-    railwayConfigured,
-    inAppUpdateSupported: selfUpdateSupported || deployHookConfigured || railwayConfigured,
+    hostingMode: updateConfig.hostingMode,
+    selfUpdateSupported: updateConfig.supported,
+    deployHookConfigured: updateConfig.deployHookConfigured,
+    railwayConfigured: updateConfig.railwayConfigured,
+    inAppUpdateSupported: updateConfig.inAppUpdateSupported,
     serverName: SERVER_CONFIG.name,
     serverVersion: SERVER_VERSION,
     version: SERVER_VERSION,
+    gitCommitSha: getRunningCommitSha(),
     serverTimeMillis: Date.now(),
     adminFeatures: [
       "drivers-roster",

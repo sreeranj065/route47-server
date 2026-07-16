@@ -128,6 +128,29 @@ export function markUpstreamDeployed(commitSha: string) {
   });
 }
 
+/** Commit SHA of the process that is actually running (host injects these). */
+export function getRunningCommitSha(): string | null {
+  const candidates = [
+    process.env.ROUTE47_GIT_COMMIT_SHA,
+    process.env.RAILWAY_GIT_COMMIT_SHA,
+    process.env.RENDER_GIT_COMMIT,
+    process.env.SOURCE_COMMIT,
+    process.env.GITHUB_SHA,
+  ];
+  for (const raw of candidates) {
+    const value = raw?.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+function commitsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a?.trim() || !b?.trim()) return false;
+  const left = a.trim().toLowerCase();
+  const right = b.trim().toLowerCase();
+  return left === right || left.startsWith(right) || right.startsWith(left);
+}
+
 async function fetchLatestServerCommit(): Promise<{
   sha: string | null;
   message: string | null;
@@ -191,12 +214,18 @@ function isVersionNewer(latest: string, deployed: string): boolean {
 
 /**
  * Same intent as Railway Upstream → Check for updates:
- * Is GitHub main ahead of what this server last applied?
+ * Is GitHub main ahead of the commit this server is actually running?
+ *
+ * Important: never mark a GitHub SHA as "deployed" just because package.json
+ * versions match — that hid real pushes when version stayed at 1.0.0.
  */
 export async function checkUpstreamRepoStatus(deployedVersion: string) {
   const latest = await fetchLatestServerCommit();
   const githubVersion = await fetchGithubPackageVersion();
   const state = readUpstreamState();
+  const runningSha = getRunningCommitSha();
+  // Prefer the live process commit; fall back to last Admin-triggered deploy.
+  const baselineSha = runningSha ?? state.lastDeployedCommitSha ?? null;
 
   writeUpstreamState({
     ...state,
@@ -205,19 +234,32 @@ export async function checkUpstreamRepoStatus(deployedVersion: string) {
   });
 
   let updateAvailable = false;
-  if (latest.sha && state.lastDeployedCommitSha) {
-    updateAvailable = latest.sha !== state.lastDeployedCommitSha;
-  } else if (githubVersion && deployedVersion) {
-    updateAvailable = isVersionNewer(githubVersion, deployedVersion);
-  } else if (latest.sha && !state.lastDeployedCommitSha) {
-    // First Admin check: if versions match, assume in sync and remember the sha.
-    if (githubVersion && deployedVersion && !isVersionNewer(githubVersion, deployedVersion)) {
-      markUpstreamDeployed(latest.sha);
-      updateAvailable = false;
-    } else {
+  let reason: "commit" | "version" | "unknown_offer" | "current" | "github_unreachable" =
+    "current";
+
+  if (!latest.sha) {
+    // GitHub API failed (rate limit / network) — fall back to package version only.
+    if (githubVersion && deployedVersion && isVersionNewer(githubVersion, deployedVersion)) {
       updateAvailable = true;
+      reason = "version";
+    } else {
+      updateAvailable = false;
+      reason = "github_unreachable";
     }
+  } else if (baselineSha) {
+    updateAvailable = !commitsMatch(latest.sha, baselineSha);
+    reason = updateAvailable ? "commit" : "current";
+  } else if (githubVersion && deployedVersion && isVersionNewer(githubVersion, deployedVersion)) {
+    updateAvailable = true;
+    reason = "version";
+  } else {
+    // No running SHA yet (older image) and versions are equal — still offer
+    // update so a fresh GitHub push is never silently ignored.
+    updateAvailable = true;
+    reason = "unknown_offer";
   }
+
+  const short = (sha: string | null) => (sha ? sha.slice(0, 7) : null);
 
   return {
     repo: SERVER_GITHUB_REPO,
@@ -228,10 +270,19 @@ export async function checkUpstreamRepoStatus(deployedVersion: string) {
     latestCommitSha: latest.sha,
     latestCommitMessage: latest.message,
     latestCommitUrl: latest.htmlUrl,
-    lastDeployedCommitSha: readUpstreamState().lastDeployedCommitSha ?? null,
+    runningCommitSha: runningSha,
+    lastDeployedCommitSha: state.lastDeployedCommitSha ?? null,
+    baselineCommitSha: baselineSha,
+    checkReason: reason,
     message: updateAvailable
-      ? "Upstream GitHub main has newer code — same as Railway Upstream → Check for updates."
-      : "Already on the latest upstream GitHub main commit.",
+      ? reason === "version"
+        ? `Newer server version on GitHub (${githubVersion}) than this host (v${deployedVersion}).`
+        : reason === "unknown_offer"
+          ? `GitHub ${SERVER_GITHUB_BRANCH} has ${short(latest.sha)}${latest.message ? ` — ${latest.message}` : ""}. This host has no commit fingerprint yet — Update redeploys latest main.`
+          : `GitHub ${SERVER_GITHUB_BRANCH} is ahead (${short(latest.sha)}${latest.message ? `: ${latest.message}` : ""}). Running ${short(baselineSha)}.`
+      : reason === "github_unreachable"
+        ? "Could not read GitHub main (network/rate limit). Try again in a minute."
+        : "Already on the latest upstream GitHub main commit.",
   };
 }
 
