@@ -31,6 +31,24 @@ export function getDeployHookUrl(): string {
   return process.env.ROUTE47_DEPLOY_HOOK_URL?.trim() || "";
 }
 
+/** Official server repo used when Railway should deploy the latest commit. */
+const SERVER_GITHUB_REPO =
+  process.env.ROUTE47_SERVER_GITHUB_REPO?.trim() || "sreeranj065/route47-server";
+const SERVER_GITHUB_BRANCH =
+  process.env.ROUTE47_SERVER_GITHUB_BRANCH?.trim() || "main";
+
+export function getRailwayDeployConfig() {
+  const token = process.env.ROUTE47_RAILWAY_API_TOKEN?.trim() || "";
+  const serviceId = process.env.ROUTE47_RAILWAY_SERVICE_ID?.trim() || "";
+  const environmentId = process.env.ROUTE47_RAILWAY_ENVIRONMENT_ID?.trim() || "";
+  return {
+    token,
+    serviceId,
+    environmentId,
+    configured: Boolean(token && serviceId && environmentId),
+  };
+}
+
 export function getSelfUpdateConfig() {
   const hostingMode = readHostingMode();
   const enabled = process.env.ROUTE47_SELF_UPDATE_ENABLED === "true";
@@ -39,6 +57,7 @@ export function getSelfUpdateConfig() {
   const dockerHost = fs.existsSync("/var/run/docker.sock");
   const deployHookUrl = getDeployHookUrl();
   const deployHookConfigured = deployHookUrl.length > 0;
+  const railway = getRailwayDeployConfig();
   const supported =
     enabled &&
     (hostingMode === "docker" || hostingMode === "vps") &&
@@ -53,23 +72,41 @@ export function getSelfUpdateConfig() {
     dockerHost,
     supported,
     deployHookConfigured,
-    /** True when Admin can trigger an in-app update (Docker self-update or PaaS deploy hook). */
-    inAppUpdateSupported: supported || deployHookConfigured,
+    railwayConfigured: railway.configured,
+    /** True when Admin can trigger an in-app update (Docker, Render hook, or Railway API). */
+    inAppUpdateSupported: supported || deployHookConfigured || railway.configured,
   };
 }
 
-/** Fire Railway/Render (or any) deploy hook URL. Does not expose the secret. */
-export async function triggerDeployHook(): Promise<{
+type PaaSTriggerResult = {
   started: boolean;
   message: string;
   status?: SelfUpdateStatus;
-}> {
+  mode?: "deploy_hook" | "railway_api";
+};
+
+async function fetchLatestServerCommitSha(): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${SERVER_GITHUB_REPO}/commits/${encodeURIComponent(SERVER_GITHUB_BRANCH)}`,
+      { headers: { Accept: "application/vnd.github+json" } },
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as { sha?: string };
+    return json.sha?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Render (and any host that exposes a deploy-hook URL). */
+export async function triggerDeployHook(): Promise<PaaSTriggerResult> {
   const hookUrl = getDeployHookUrl();
   if (!hookUrl) {
     return {
       started: false,
       message:
-        "No deploy hook configured. Set ROUTE47_DEPLOY_HOOK_URL on the server (Railway/Render Deploy Hook), or enable Docker/VPS self-update.",
+        "No deploy hook configured. On Render set ROUTE47_DEPLOY_HOOK_URL to Settings → Deploy Hook.",
     };
   }
 
@@ -81,37 +118,42 @@ export async function triggerDeployHook(): Promise<{
   writeSelfUpdateState({
     status: "running",
     startedAt: Date.now(),
-    message: "Deploy hook triggered — waiting for the new version to come online…",
+    message: "Render deploy hook triggered — waiting for the new version…",
   });
 
   try {
     const response = await fetch(hookUrl, { method: "POST" });
-    if (!response.ok) {
-      const body = (await response.text().catch(() => "")).trim().slice(0, 200);
-      writeSelfUpdateState({
-        status: "failed",
-        startedAt: current.startedAt ?? Date.now(),
-        completedAt: Date.now(),
-        message: `Deploy hook failed (HTTP ${response.status})${body ? `: ${body}` : ""}`,
-      });
-      return {
-        started: false,
-        message: `Deploy hook failed (HTTP ${response.status}). Check the hook URL in server env.`,
-        status: "failed",
-      };
+    // Render accepts GET or POST; some hooks return 200 with empty body.
+    if (!response.ok && response.status !== 201) {
+      const getRes = await fetch(hookUrl, { method: "GET" });
+      if (!getRes.ok) {
+        const body = (await response.text().catch(() => "")).trim().slice(0, 200);
+        writeSelfUpdateState({
+          status: "failed",
+          startedAt: current.startedAt ?? Date.now(),
+          completedAt: Date.now(),
+          message: `Deploy hook failed (HTTP ${response.status})${body ? `: ${body}` : ""}`,
+        });
+        return {
+          started: false,
+          message: `Deploy hook failed (HTTP ${response.status}). Check ROUTE47_DEPLOY_HOOK_URL.`,
+          status: "failed",
+        };
+      }
     }
 
     writeSelfUpdateState({
       status: "success",
       startedAt: Date.now(),
       completedAt: Date.now(),
-      message: "Deploy triggered. The host is rebuilding — wait for the new version, then refresh.",
+      message: "Deploy triggered on Render. Waiting for the new version to come online…",
     });
 
     return {
       started: true,
-      message: "Deploy triggered via hosting hook. The server will restart with the new version shortly.",
+      message: "Render deploy started. The server will restart with the new version shortly.",
       status: "success",
+      mode: "deploy_hook",
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -127,6 +169,130 @@ export async function triggerDeployHook(): Promise<{
       status: "failed",
     };
   }
+}
+
+/** Railway one-tap deploy via GraphQL (account/workspace token — not project token). */
+export async function triggerRailwayDeploy(): Promise<PaaSTriggerResult> {
+  const railway = getRailwayDeployConfig();
+  if (!railway.configured) {
+    return {
+      started: false,
+      message:
+        "Railway update not configured. Set ROUTE47_RAILWAY_API_TOKEN, ROUTE47_RAILWAY_SERVICE_ID, and ROUTE47_RAILWAY_ENVIRONMENT_ID on the server.",
+    };
+  }
+
+  const current = readSelfUpdateState();
+  if (current.status === "running") {
+    return { started: false, message: "An update is already in progress." };
+  }
+
+  writeSelfUpdateState({
+    status: "running",
+    startedAt: Date.now(),
+    message: "Triggering Railway deploy of the latest server commit…",
+  });
+
+  const commitSha = await fetchLatestServerCommitSha();
+  const query = commitSha
+    ? `mutation serviceInstanceDeployV2($serviceId: String!, $environmentId: String!, $commitSha: String) {
+         serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId, commitSha: $commitSha)
+       }`
+    : `mutation serviceInstanceDeployV2($serviceId: String!, $environmentId: String!) {
+         serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
+       }`;
+
+  try {
+    const response = await fetch("https://backboard.railway.com/graphql/v2", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${railway.token}`,
+      },
+      body: JSON.stringify({
+        query,
+        variables: {
+          serviceId: railway.serviceId,
+          environmentId: railway.environmentId,
+          ...(commitSha ? { commitSha } : {}),
+        },
+      }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as {
+      data?: { serviceInstanceDeployV2?: string };
+      errors?: Array<{ message?: string }>;
+    } | null;
+
+    if (!response.ok || payload?.errors?.length) {
+      const errMsg =
+        payload?.errors?.map((e) => e.message).filter(Boolean).join("; ") ||
+        `HTTP ${response.status}`;
+      writeSelfUpdateState({
+        status: "failed",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        message: `Railway deploy failed: ${errMsg}`,
+      });
+      return {
+        started: false,
+        message: `Railway deploy failed: ${errMsg}. Use an Account/Workspace token (not a Project token).`,
+        status: "failed",
+      };
+    }
+
+    writeSelfUpdateState({
+      status: "success",
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      message: "Railway deploy started. Waiting for the new version to come online…",
+    });
+
+    return {
+      started: true,
+      message: "Railway deploy started. The server will restart with the new version shortly.",
+      status: "success",
+      mode: "railway_api",
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    writeSelfUpdateState({
+      status: "failed",
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      message: `Railway API request failed: ${detail}`,
+    });
+    return {
+      started: false,
+      message: `Could not reach Railway API: ${detail}`,
+      status: "failed",
+    };
+  }
+}
+
+/**
+ * One-tap PaaS update: Render deploy hook and/or Railway GraphQL.
+ * Prefer hosting-mode match, then whichever credentials are present.
+ */
+export async function triggerPaaSUpdate(): Promise<PaaSTriggerResult> {
+  const config = getSelfUpdateConfig();
+  const railway = getRailwayDeployConfig();
+
+  if (config.hostingMode === "render" && config.deployHookConfigured) {
+    return triggerDeployHook();
+  }
+  if (config.hostingMode === "railway" && railway.configured) {
+    return triggerRailwayDeploy();
+  }
+  // Fallbacks when hostingMode is wrong/unset but credentials exist.
+  if (config.deployHookConfigured) return triggerDeployHook();
+  if (railway.configured) return triggerRailwayDeploy();
+
+  return {
+    started: false,
+    message:
+      "No PaaS update credentials. Render: set ROUTE47_DEPLOY_HOOK_URL. Railway: set ROUTE47_RAILWAY_API_TOKEN + ROUTE47_RAILWAY_SERVICE_ID + ROUTE47_RAILWAY_ENVIRONMENT_ID.",
+  };
 }
 
 export function readSelfUpdateState(): SelfUpdateState {

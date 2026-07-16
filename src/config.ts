@@ -35,6 +35,14 @@ export function isDeployHookConfigured(): boolean {
   return Boolean(process.env.ROUTE47_DEPLOY_HOOK_URL?.trim());
 }
 
+export function isRailwayUpdateConfigured(): boolean {
+  return Boolean(
+    process.env.ROUTE47_RAILWAY_API_TOKEN?.trim() &&
+      process.env.ROUTE47_RAILWAY_SERVICE_ID?.trim() &&
+      process.env.ROUTE47_RAILWAY_ENVIRONMENT_ID?.trim(),
+  );
+}
+
 export const SERVER_CONFIG = {
   name: "Route47 Customer Server",
   shortName: "route47-server",
@@ -49,6 +57,7 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     selfUpdateEnabled &&
     (SERVER_HOSTING_MODE === "docker" || SERVER_HOSTING_MODE === "vps");
   const deployHookConfigured = isDeployHookConfigured();
+  const railwayConfigured = isRailwayUpdateConfigured();
 
   let disk: Record<string, unknown> = {};
   try {
@@ -63,7 +72,8 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     hostingMode: SERVER_HOSTING_MODE,
     selfUpdateSupported,
     deployHookConfigured,
-    inAppUpdateSupported: selfUpdateSupported || deployHookConfigured,
+    railwayConfigured,
+    inAppUpdateSupported: selfUpdateSupported || deployHookConfigured || railwayConfigured,
     serverName: SERVER_CONFIG.name,
     serverVersion: SERVER_VERSION,
     version: SERVER_VERSION,

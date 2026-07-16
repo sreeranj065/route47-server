@@ -3,7 +3,7 @@ import { requireAdminRole, type AdminIdentity } from "../lib/admin-auth.js";
 import {
   getSelfUpdateConfig,
   readSelfUpdateState,
-  triggerDeployHook,
+  triggerPaaSUpdate,
   triggerSelfUpdate,
 } from "../lib/server-self-update.js";
 import { companyRoutes } from "./auth.js";
@@ -26,6 +26,7 @@ companyRoutes.get("/route47/companies/:companyId/admin/server/update-capabilitie
     hostingMode: config.hostingMode,
     selfUpdateSupported: config.supported,
     deployHookConfigured: config.deployHookConfigured,
+    railwayConfigured: config.railwayConfigured,
     inAppUpdateSupported: config.inAppUpdateSupported,
     updateStatus: state.status,
     updateMessage: state.message,
@@ -46,7 +47,7 @@ companyRoutes.post("/route47/companies/:companyId/admin/server/update", async (c
 
   const config = getSelfUpdateConfig();
 
-  // Prefer Docker/VPS self-update when available; otherwise PaaS deploy hook.
+  // Prefer Docker/VPS self-update when available.
   if (config.supported) {
     const result = triggerSelfUpdate();
     if (!result.started) {
@@ -55,6 +56,7 @@ companyRoutes.post("/route47/companies/:companyId/admin/server/update", async (c
           message: result.message,
           selfUpdateSupported: true,
           deployHookConfigured: config.deployHookConfigured,
+          railwayConfigured: config.railwayConfigured,
           inAppUpdateSupported: config.inAppUpdateSupported,
         },
         409,
@@ -66,6 +68,7 @@ companyRoutes.post("/route47/companies/:companyId/admin/server/update", async (c
         message: result.message,
         selfUpdateSupported: true,
         deployHookConfigured: config.deployHookConfigured,
+        railwayConfigured: config.railwayConfigured,
         inAppUpdateSupported: true,
         updateStatus: "running",
         mode: "docker_self_update",
@@ -74,15 +77,16 @@ companyRoutes.post("/route47/companies/:companyId/admin/server/update", async (c
     );
   }
 
-  if (config.deployHookConfigured) {
-    const result = await triggerDeployHook();
+  if (config.deployHookConfigured || config.railwayConfigured) {
+    const result = await triggerPaaSUpdate();
     if (!result.started) {
       return c.json(
         {
           message: result.message,
           selfUpdateSupported: false,
-          deployHookConfigured: true,
-          inAppUpdateSupported: true,
+          deployHookConfigured: config.deployHookConfigured,
+          railwayConfigured: config.railwayConfigured,
+          inAppUpdateSupported: config.inAppUpdateSupported,
           updateStatus: result.status ?? "failed",
         },
         409,
@@ -93,10 +97,11 @@ companyRoutes.post("/route47/companies/:companyId/admin/server/update", async (c
       {
         message: result.message,
         selfUpdateSupported: false,
-        deployHookConfigured: true,
+        deployHookConfigured: config.deployHookConfigured,
+        railwayConfigured: config.railwayConfigured,
         inAppUpdateSupported: true,
         updateStatus: result.status ?? "success",
-        mode: "deploy_hook",
+        mode: result.mode ?? "paas",
         status: "deploy_triggered",
       },
       202,
@@ -106,9 +111,10 @@ companyRoutes.post("/route47/companies/:companyId/admin/server/update", async (c
   return c.json(
     {
       message:
-        "In-app update is not configured. On Docker/VPS enable ROUTE47_SELF_UPDATE_ENABLED; on Railway/Render set ROUTE47_DEPLOY_HOOK_URL to your Deploy Hook.",
+        "In-app update is not configured. Render: set ROUTE47_DEPLOY_HOOK_URL. Railway: set ROUTE47_RAILWAY_API_TOKEN, ROUTE47_RAILWAY_SERVICE_ID, and ROUTE47_RAILWAY_ENVIRONMENT_ID. Docker/VPS: enable ROUTE47_SELF_UPDATE_ENABLED.",
       selfUpdateSupported: false,
       deployHookConfigured: false,
+      railwayConfigured: false,
       inAppUpdateSupported: false,
       hostingMode: config.hostingMode,
     },

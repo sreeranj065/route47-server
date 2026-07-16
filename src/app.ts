@@ -78,13 +78,19 @@ app.get("/healthz", (c) => {
     process.env.ROUTE47_SELF_UPDATE_ENABLED === "true" &&
     (SERVER_CONFIG.hostingMode === "docker" || SERVER_CONFIG.hostingMode === "vps");
   const deployHookConfigured = Boolean(process.env.ROUTE47_DEPLOY_HOOK_URL?.trim());
+  const railwayConfigured = Boolean(
+    process.env.ROUTE47_RAILWAY_API_TOKEN?.trim() &&
+      process.env.ROUTE47_RAILWAY_SERVICE_ID?.trim() &&
+      process.env.ROUTE47_RAILWAY_ENVIRONMENT_ID?.trim(),
+  );
   return c.json({
     ok: true,
     version: SERVER_CONFIG.version,
     hostingMode: SERVER_CONFIG.hostingMode,
     selfUpdateSupported,
     deployHookConfigured,
-    inAppUpdateSupported: selfUpdateSupported || deployHookConfigured,
+    railwayConfigured,
+    inAppUpdateSupported: selfUpdateSupported || deployHookConfigured || railwayConfigured,
   });
 });
 
