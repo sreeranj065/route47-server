@@ -1,6 +1,8 @@
 import { getCompany } from "../db.js";
+import { SERVER_VERSION } from "../config.js";
 import { requireAdminRole, type AdminIdentity } from "../lib/admin-auth.js";
 import {
+  checkUpstreamRepoStatus,
   getSelfUpdateConfig,
   readSelfUpdateState,
   triggerPaaSUpdate,
@@ -32,6 +34,28 @@ companyRoutes.get("/route47/companies/:companyId/admin/server/update-capabilitie
     updateMessage: state.message,
     startedAtMillis: state.startedAt,
     completedAtMillis: state.completedAt,
+  });
+});
+
+/** Equivalent of Railway Upstream → Check for updates (GitHub main vs last applied). */
+companyRoutes.get("/route47/companies/:companyId/admin/server/upstream-check", async (c) => {
+  const admin = getAdmin(c);
+  if (!admin) return c.json({ message: "Admin API key required." }, 401);
+
+  const companyId = c.req.param("companyId");
+  if (!getCompany(companyId)) return c.json({ message: "Company not found." }, 404);
+
+  const config = getSelfUpdateConfig();
+  const upstream = await checkUpstreamRepoStatus(SERVER_VERSION);
+
+  return c.json({
+    ...upstream,
+    hostingMode: config.hostingMode,
+    selfUpdateSupported: config.supported,
+    deployHookConfigured: config.deployHookConfigured,
+    railwayConfigured: config.railwayConfigured,
+    inAppUpdateSupported: config.inAppUpdateSupported,
+    deployedVersion: SERVER_VERSION,
   });
 });
 

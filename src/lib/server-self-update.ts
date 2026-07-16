@@ -20,6 +20,14 @@ export interface SelfUpdateState {
 }
 
 const STATUS_FILE = path.join(DATA_DIR, ".server-update-status.json");
+/** Tracks which GitHub main commit was last applied via Admin (Railway upstream equivalent). */
+const UPSTREAM_STATE_FILE = path.join(DATA_DIR, ".upstream-deploy-state.json");
+
+interface UpstreamDeployState {
+  lastDeployedCommitSha?: string;
+  lastCheckedCommitSha?: string;
+  lastCheckedAtMillis?: number;
+}
 
 function readHostingMode(): ServerHostingMode {
   const raw = process.env.ROUTE47_HOSTING_MODE?.trim().toLowerCase();
@@ -85,18 +93,134 @@ type PaaSTriggerResult = {
   mode?: "deploy_hook" | "railway_api";
 };
 
-async function fetchLatestServerCommitSha(): Promise<string | null> {
+function readUpstreamState(): UpstreamDeployState {
+  try {
+    return JSON.parse(fs.readFileSync(UPSTREAM_STATE_FILE, "utf8")) as UpstreamDeployState;
+  } catch {
+    return {};
+  }
+}
+
+function writeUpstreamState(state: UpstreamDeployState) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(UPSTREAM_STATE_FILE, JSON.stringify(state));
+}
+
+export function markUpstreamDeployed(commitSha: string) {
+  const prev = readUpstreamState();
+  writeUpstreamState({
+    ...prev,
+    lastDeployedCommitSha: commitSha,
+    lastCheckedCommitSha: commitSha,
+    lastCheckedAtMillis: Date.now(),
+  });
+}
+
+async function fetchLatestServerCommit(): Promise<{
+  sha: string | null;
+  message: string | null;
+  htmlUrl: string | null;
+}> {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${SERVER_GITHUB_REPO}/commits/${encodeURIComponent(SERVER_GITHUB_BRANCH)}`,
       { headers: { Accept: "application/vnd.github+json" } },
     );
+    if (!res.ok) return { sha: null, message: null, htmlUrl: null };
+    const json = (await res.json()) as {
+      sha?: string;
+      html_url?: string;
+      commit?: { message?: string };
+    };
+    return {
+      sha: json.sha?.trim() || null,
+      message: json.commit?.message?.trim().split("\n")[0] || null,
+      htmlUrl: json.html_url ?? null,
+    };
+  } catch {
+    return { sha: null, message: null, htmlUrl: null };
+  }
+}
+
+async function fetchLatestServerCommitSha(): Promise<string | null> {
+  const latest = await fetchLatestServerCommit();
+  return latest.sha;
+}
+
+async function fetchGithubPackageVersion(): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://raw.githubusercontent.com/${SERVER_GITHUB_REPO}/${encodeURIComponent(SERVER_GITHUB_BRANCH)}/package.json`,
+      { headers: { Accept: "application/json" } },
+    );
     if (!res.ok) return null;
-    const json = (await res.json()) as { sha?: string };
-    return json.sha?.trim() || null;
+    const json = (await res.json()) as { version?: string };
+    return json.version?.trim() || null;
   } catch {
     return null;
   }
+}
+
+function isVersionNewer(latest: string, deployed: string): boolean {
+  const parse = (value: string) =>
+    value
+      .replace(/^v/i, "")
+      .split(".")
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(latest);
+  const b = parse(deployed);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff > 0) return true;
+    if (diff < 0) return false;
+  }
+  return false;
+}
+
+/**
+ * Same intent as Railway Upstream → Check for updates:
+ * Is GitHub main ahead of what this server last applied?
+ */
+export async function checkUpstreamRepoStatus(deployedVersion: string) {
+  const latest = await fetchLatestServerCommit();
+  const githubVersion = await fetchGithubPackageVersion();
+  const state = readUpstreamState();
+
+  writeUpstreamState({
+    ...state,
+    lastCheckedCommitSha: latest.sha ?? state.lastCheckedCommitSha,
+    lastCheckedAtMillis: Date.now(),
+  });
+
+  let updateAvailable = false;
+  if (latest.sha && state.lastDeployedCommitSha) {
+    updateAvailable = latest.sha !== state.lastDeployedCommitSha;
+  } else if (githubVersion && deployedVersion) {
+    updateAvailable = isVersionNewer(githubVersion, deployedVersion);
+  } else if (latest.sha && !state.lastDeployedCommitSha) {
+    // First Admin check: if versions match, assume in sync and remember the sha.
+    if (githubVersion && deployedVersion && !isVersionNewer(githubVersion, deployedVersion)) {
+      markUpstreamDeployed(latest.sha);
+      updateAvailable = false;
+    } else {
+      updateAvailable = true;
+    }
+  }
+
+  return {
+    repo: SERVER_GITHUB_REPO,
+    branch: SERVER_GITHUB_BRANCH,
+    updateAvailable,
+    deployedVersion,
+    latestVersion: githubVersion,
+    latestCommitSha: latest.sha,
+    latestCommitMessage: latest.message,
+    latestCommitUrl: latest.htmlUrl,
+    lastDeployedCommitSha: readUpstreamState().lastDeployedCommitSha ?? null,
+    message: updateAvailable
+      ? "Upstream GitHub main has newer code — same as Railway Upstream → Check for updates."
+      : "Already on the latest upstream GitHub main commit.",
+  };
 }
 
 /** Render (and any host that exposes a deploy-hook URL). */
@@ -142,16 +266,19 @@ export async function triggerDeployHook(): Promise<PaaSTriggerResult> {
       }
     }
 
+    const sha = await fetchLatestServerCommitSha();
+    if (sha) markUpstreamDeployed(sha);
+
     writeSelfUpdateState({
       status: "success",
       startedAt: Date.now(),
       completedAt: Date.now(),
-      message: "Deploy triggered on Render. Waiting for the new version to come online…",
+      message: "Deploy triggered on Render (latest GitHub). Waiting for the new version…",
     });
 
     return {
       started: true,
-      message: "Render deploy started. The server will restart with the new version shortly.",
+      message: "Render deploy started from latest GitHub — same idea as Railway Upstream Update.",
       status: "success",
       mode: "deploy_hook",
     };
@@ -241,16 +368,22 @@ export async function triggerRailwayDeploy(): Promise<PaaSTriggerResult> {
       };
     }
 
+    if (commitSha) {
+      markUpstreamDeployed(commitSha);
+    }
+
     writeSelfUpdateState({
       status: "success",
       startedAt: Date.now(),
       completedAt: Date.now(),
-      message: "Railway deploy started. Waiting for the new version to come online…",
+      message:
+        "Railway upstream deploy started (latest GitHub main). Waiting for the new build to come online…",
     });
 
     return {
       started: true,
-      message: "Railway deploy started. The server will restart with the new version shortly.",
+      message:
+        "Update applied like Railway Upstream → Update. Deploying latest GitHub main — server will restart shortly.",
       status: "success",
       mode: "railway_api",
     };
