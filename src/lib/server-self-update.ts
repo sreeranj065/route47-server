@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "../db.js";
+import { readStoredUpdateCredentials } from "./update-credentials-store.js";
 
 export type ServerHostingMode = "docker" | "vps" | "railway" | "render" | "development";
 
@@ -30,13 +31,18 @@ interface UpstreamDeployState {
 }
 
 function readHostingMode(): ServerHostingMode {
-  const raw = process.env.ROUTE47_HOSTING_MODE?.trim().toLowerCase();
+  const stored = readStoredUpdateCredentials().hostingMode;
+  const raw = (process.env.ROUTE47_HOSTING_MODE?.trim() || stored || "").toLowerCase();
   if (raw === "docker" || raw === "vps" || raw === "railway" || raw === "render") return raw;
   return "development";
 }
 
 export function getDeployHookUrl(): string {
-  return process.env.ROUTE47_DEPLOY_HOOK_URL?.trim() || "";
+  return (
+    process.env.ROUTE47_DEPLOY_HOOK_URL?.trim() ||
+    readStoredUpdateCredentials().deployHookUrl?.trim() ||
+    ""
+  );
 }
 
 /** Official server repo used when Railway should deploy the latest commit. */
@@ -46,9 +52,15 @@ const SERVER_GITHUB_BRANCH =
   process.env.ROUTE47_SERVER_GITHUB_BRANCH?.trim() || "main";
 
 export function getRailwayDeployConfig() {
-  const token = process.env.ROUTE47_RAILWAY_API_TOKEN?.trim() || "";
-  const serviceId = process.env.ROUTE47_RAILWAY_SERVICE_ID?.trim() || "";
-  const environmentId = process.env.ROUTE47_RAILWAY_ENVIRONMENT_ID?.trim() || "";
+  const stored = readStoredUpdateCredentials();
+  const token =
+    process.env.ROUTE47_RAILWAY_API_TOKEN?.trim() || stored.railwayApiToken?.trim() || "";
+  const serviceId =
+    process.env.ROUTE47_RAILWAY_SERVICE_ID?.trim() || stored.railwayServiceId?.trim() || "";
+  const environmentId =
+    process.env.ROUTE47_RAILWAY_ENVIRONMENT_ID?.trim() ||
+    stored.railwayEnvironmentId?.trim() ||
+    "";
   return {
     token,
     serviceId,

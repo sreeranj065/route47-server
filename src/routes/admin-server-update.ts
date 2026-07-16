@@ -8,6 +8,11 @@ import {
   triggerPaaSUpdate,
   triggerSelfUpdate,
 } from "../lib/server-self-update.js";
+import {
+  maskSecret,
+  readStoredUpdateCredentials,
+  writeStoredUpdateCredentials,
+} from "../lib/update-credentials-store.js";
 import { companyRoutes } from "./auth.js";
 
 function getAdmin(c: { get: (key: "admin") => AdminIdentity | undefined }) {
@@ -34,6 +39,72 @@ companyRoutes.get("/route47/companies/:companyId/admin/server/update-capabilitie
     updateMessage: state.message,
     startedAtMillis: state.startedAt,
     completedAtMillis: state.completedAt,
+  });
+});
+
+companyRoutes.get("/route47/companies/:companyId/admin/server/update-credentials", (c) => {
+  const admin = getAdmin(c);
+  if (!admin) return c.json({ message: "Admin API key required." }, 401);
+
+  const companyId = c.req.param("companyId");
+  if (!getCompany(companyId)) return c.json({ message: "Company not found." }, 404);
+
+  const stored = readStoredUpdateCredentials();
+  const config = getSelfUpdateConfig();
+
+  return c.json({
+    hostingMode: config.hostingMode,
+    inAppUpdateSupported: config.inAppUpdateSupported,
+    railwayConfigured: config.railwayConfigured,
+    deployHookConfigured: config.deployHookConfigured,
+    selfUpdateSupported: config.supported,
+    stored: {
+      hostingMode: stored.hostingMode ?? null,
+      railwayApiTokenMasked: maskSecret(stored.railwayApiToken),
+      railwayServiceId: stored.railwayServiceId ?? null,
+      railwayEnvironmentId: stored.railwayEnvironmentId ?? null,
+      deployHookUrlMasked: maskSecret(stored.deployHookUrl),
+      updatedAtMillis: stored.updatedAtMillis ?? null,
+    },
+  });
+});
+
+companyRoutes.put("/route47/companies/:companyId/admin/server/update-credentials", async (c) => {
+  const admin = getAdmin(c);
+  if (!admin) return c.json({ message: "Admin API key required." }, 401);
+  if (!requireAdminRole(admin, "owner", "admin")) {
+    return c.json({ message: "Only owners and admins can change update settings." }, 403);
+  }
+
+  const companyId = c.req.param("companyId");
+  if (!getCompany(companyId)) return c.json({ message: "Company not found." }, 404);
+
+  const body = await c.req.json<{
+    hostingMode?: "railway" | "render" | "vps" | "docker" | "development";
+    railwayApiToken?: string;
+    railwayServiceId?: string;
+    railwayEnvironmentId?: string;
+    deployHookUrl?: string;
+  }>();
+
+  writeStoredUpdateCredentials({
+    hostingMode: body.hostingMode,
+    railwayApiToken: body.railwayApiToken?.trim(),
+    railwayServiceId: body.railwayServiceId?.trim(),
+    railwayEnvironmentId: body.railwayEnvironmentId?.trim(),
+    deployHookUrl: body.deployHookUrl?.trim(),
+  });
+
+  const config = getSelfUpdateConfig();
+  return c.json({
+    message: config.inAppUpdateSupported
+      ? "One-tap updates are ready. Use Check for updates in Settings → Server."
+      : "Saved. Add the missing Railway or Render details to finish enabling updates.",
+    inAppUpdateSupported: config.inAppUpdateSupported,
+    railwayConfigured: config.railwayConfigured,
+    deployHookConfigured: config.deployHookConfigured,
+    selfUpdateSupported: config.supported,
+    hostingMode: config.hostingMode,
   });
 });
 
