@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { app } from "./app.js";
 import { SERVER_CONFIG, SERVER_VERSION } from "./config.js";
 import { DATA_DIR, DB_PATH } from "./db.js";
+import { startBackupScheduler } from "./lib/backup-scheduler.js";
 
 function resolvePort(): number {
   const raw = process.env.PORT?.trim();
@@ -33,3 +34,4 @@ console.log(`  ngrok http ${port}`);
 console.log("  set ROUTE47_PUBLIC_URL=https://your-ngrok-url");
 
 serve({ fetch: app.fetch, port, hostname });
+startBackupScheduler();

@@ -15,6 +15,7 @@ export const NOTIFICATION_TYPES = {
   LICENSE_NOTICE: "license.notice",
   MESSAGE: "message.incoming",
   SYNC_SILENT: "sync.silent",
+  BACKUP_READY: "backup.ready",
 } as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES];
@@ -47,4 +48,5 @@ export const TYPE_CATEGORY: Record<string, NotificationCategory> = {
   [NOTIFICATION_TYPES.LICENSE_NOTICE]: "billing",
   [NOTIFICATION_TYPES.MESSAGE]: "system",
   [NOTIFICATION_TYPES.SYNC_SILENT]: "system",
+  [NOTIFICATION_TYPES.BACKUP_READY]: "system",
 };
