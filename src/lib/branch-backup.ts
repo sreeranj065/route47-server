@@ -126,8 +126,24 @@ function listDriverIdsForBranch(companyId: string, branchId: string): string[] {
     .map((row) => row.id);
 }
 
+/** Matches node:sqlite SQLInputValue (no boolean — store 0/1). */
+type SqlValue = null | number | bigint | string | NodeJS.ArrayBufferView;
+
+function toSqlValue(value: unknown): SqlValue {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
+    return value;
+  }
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "object" && value !== null && ArrayBuffer.isView(value)) {
+    return value as NodeJS.ArrayBufferView;
+  }
+  // Objects/arrays are stored as JSON text in SQLite TEXT columns when needed.
+  return JSON.stringify(value);
+}
+
 function selectAll(sql: string, ...params: unknown[]): Record<string, unknown>[] {
-  return db.prepare(sql).all(...params) as Record<string, unknown>[];
+  return db.prepare(sql).all(...params.map(toSqlValue)) as Record<string, unknown>[];
 }
 
 function buildDbExport(companyId: string, branchId: string) {
@@ -442,7 +458,9 @@ function applyDbExport(
 
   const attachmentIds = (exportData.message_attachments ?? []).map((row) => String(row.id));
 
-  const tx = db.transaction(() => {
+  // node:sqlite DatabaseSync has no better-sqlite3-style .transaction(); use BEGIN/COMMIT.
+  db.exec("BEGIN");
+  try {
     // Clear existing branch-scoped rows (driver-owned + branch columns).
     if (attachmentIds.length) {
       const attPh = attachmentIds.map(() => "?").join(",");
@@ -516,7 +534,7 @@ function applyDbExport(
         `INSERT OR REPLACE INTO ${table} (${columns.join(",")}) VALUES (${ph})`,
       );
       for (const row of rows) {
-        stmt.run(...columns.map((col) => row[col] ?? null));
+        stmt.run(...columns.map((col) => toSqlValue(row[col])));
       }
     };
 
@@ -548,9 +566,16 @@ function applyDbExport(
       "message_attachments",
       exportData.message_attachments as Record<string, unknown>[],
     );
-  });
 
-  tx();
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    throw error;
+  }
 }
 
 function restoreOperationalFiles(companyId: string, branchId: string, filesRoot: string) {

@@ -178,7 +178,10 @@ companyRoutes.post("/route47/companies/:companyId/admin/backups/:backupId/restor
   const backupId = c.req.param("backupId");
   if (!getCompany(companyId)) return c.json({ message: "Company not found." }, 404);
 
-  const body = await c.req.json<{ branchId?: string; confirm?: boolean }>().catch(() => ({}));
+  const body = (await c.req.json().catch(() => ({}))) as {
+    branchId?: string;
+    confirm?: boolean;
+  };
   const branchId = body.branchId?.trim() ?? c.req.query("branchId")?.trim() ?? "";
   if (!branchId) return c.json({ message: "branchId is required." }, 400);
   if (!body.confirm) {
