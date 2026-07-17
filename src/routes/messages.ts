@@ -247,7 +247,16 @@ companyRoutes.get("/route47/companies/:companyId/messages/conversations", (c) =>
          m.body AS lastMessageBody,
          m.attachment_url AS lastMessageAttachmentUrl,
          m.mime_type AS lastMessageMimeType,
-         m.created_at AS lastMessageCreatedAtMillis
+         m.created_at AS lastMessageCreatedAtMillis,
+         (
+           SELECT COUNT(*)
+           FROM messages um
+           WHERE um.company_id = c.company_id
+             AND um.conversation_driver_id = c.driver_id
+             AND um.sender_type != 'admin'
+             AND um.read_at IS NULL
+             AND um.deleted_at IS NULL
+         ) AS unreadCount
        FROM conversations c
        JOIN drivers d ON d.company_id = c.company_id AND d.id = c.driver_id
        LEFT JOIN messages m ON m.id = (
@@ -271,6 +280,7 @@ companyRoutes.get("/route47/companies/:companyId/messages/conversations", (c) =>
       lastMessageAttachmentUrl: string | null;
       lastMessageMimeType: string | null;
       lastMessageCreatedAtMillis: number | null;
+      unreadCount: number;
     }>;
 
   return c.json({
@@ -280,6 +290,7 @@ companyRoutes.get("/route47/companies/:companyId/messages/conversations", (c) =>
       driverUsername: row.driverUsername,
       vehicleId: row.vehicleId || undefined,
       lastMessageAtMillis: row.lastMessageAtMillis,
+      unreadCount: Number(row.unreadCount ?? 0),
       lastMessage: row.lastMessageId
         ? {
             id: row.lastMessageId,
@@ -415,6 +426,49 @@ companyRoutes.get("/route47/companies/:companyId/messages/conversations/:driverI
       branchId: driver.branchId || undefined,
       messages: messages.map(messageToJson),
     },
+  });
+});
+
+companyRoutes.post("/route47/companies/:companyId/messages/conversations/:driverId/read", (c) => {
+  if (!requireAdmin(c)) {
+    return c.json({ message: "Admin API key required." }, 401);
+  }
+
+  const companyId = c.req.param("companyId");
+  const driverId = c.req.param("driverId")?.trim() ?? "";
+  const admin = c.get("admin");
+
+  if (!driverId) {
+    return c.json({ message: "driverId is required." }, 400);
+  }
+
+  const driver = getDriverRecord(companyId, driverId);
+  if (!driver) {
+    return c.json({ message: "Driver not found." }, 404);
+  }
+
+  if (!adminCanAccessDriver(companyId, admin, driverId)) {
+    return c.json({ message: "You do not have access to this driver." }, 403);
+  }
+
+  const readAt = now();
+  const result = db
+    .prepare(
+      `UPDATE messages
+       SET read_at = ?
+       WHERE company_id = ?
+         AND conversation_driver_id = ?
+         AND sender_type != 'admin'
+         AND read_at IS NULL
+         AND deleted_at IS NULL`,
+    )
+    .run(readAt, companyId, driverId);
+
+  return c.json({
+    message: "Conversation marked as read.",
+    driverId,
+    markedRead: result.changes,
+    readAtMillis: readAt,
   });
 });
 
