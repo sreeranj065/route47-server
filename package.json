@@ -1,6 +1,6 @@
 {
   "name": "route47-customer-server",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Route47 customer-owned fleet server",
   "private": true,
   "type": "module",
@@ -13,10 +13,12 @@
   "dependencies": {
     "@hono/node-server": "^1.14.1",
     "firebase-admin": "^13.4.0",
-    "hono": "^4.7.7"
+    "hono": "^4.7.7",
+    "nodemailer": "^9.0.3"
   },
   "devDependencies": {
     "@types/node": "^22.14.1",
+    "@types/nodemailer": "^8.0.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3"
   }

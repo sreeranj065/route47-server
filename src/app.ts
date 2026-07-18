@@ -16,6 +16,7 @@ import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
 import "./routes/admin-server-update.js";
 import "./routes/admin-backups.js";
+import "./routes/admin-pin-recovery.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";
 import { migrateMessageAttachmentPaths } from "./message-attachment-migration.js";
 

@@ -68,6 +68,9 @@ Set `ROUTE47_PUBLIC_URL` to that HTTPS domain so login responses hand drivers th
 | `ROUTE47_ADMIN_API_KEY` | *(none — required)* | Admin API key (header `X-Route47-Admin-Key`). **Must be set before using the Admin app.** |
 | `ROUTE47_PUBLIC_URL` | request origin (proxy-aware) | Public HTTPS URL returned to drivers on login/invite redemption. |
 | `HOST` | `0.0.0.0` | Bind address. |
+| `EMAIL_FROM` | *(none)* | From-address for Admin PIN recovery emails. Required if email delivery is enabled. |
+| `RESEND_API_KEY` | *(none)* | Preferred email delivery via [Resend](https://resend.com). |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | *(none)* | Alternative SMTP delivery (used when `RESEND_API_KEY` is unset). |
 
 ## Releases & updates
 
