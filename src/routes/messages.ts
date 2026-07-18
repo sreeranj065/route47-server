@@ -336,6 +336,43 @@ companyRoutes.get("/route47/companies/:companyId/messages/conversations/me", (c)
   });
 });
 
+/** Driver marks admin→driver messages as read when opening the conversation. */
+companyRoutes.post("/route47/companies/:companyId/messages/conversations/me/read", (c) => {
+  const companyId = c.req.param("companyId");
+  const driverId = c.get("driverId")?.trim() ?? "";
+  if (!driverId) {
+    return c.json({ message: "Driver authentication required." }, 401);
+  }
+  if (requireAdmin(c)) {
+    return c.json({ message: "Driver authentication required." }, 401);
+  }
+
+  const driver = getDriverRecord(companyId, driverId);
+  if (!driver) {
+    return c.json({ message: "Driver not found." }, 404);
+  }
+
+  const readAt = now();
+  const result = db
+    .prepare(
+      `UPDATE messages
+       SET read_at = ?
+       WHERE company_id = ?
+         AND conversation_driver_id = ?
+         AND sender_type = 'admin'
+         AND read_at IS NULL
+         AND deleted_at IS NULL`,
+    )
+    .run(readAt, companyId, driverId);
+
+  return c.json({
+    message: "Conversation marked as read.",
+    driverId,
+    markedRead: result.changes,
+    readAtMillis: readAt,
+  });
+});
+
 companyRoutes.post("/route47/companies/:companyId/messages/conversations/me/messages", async (c) => {
   const companyId = c.req.param("companyId");
   const driverId = c.get("driverId")?.trim() ?? "";
