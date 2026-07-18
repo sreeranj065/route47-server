@@ -50,7 +50,7 @@ export function writeEmailSettings(patch: Partial<EmailDeliverySettings>): Email
     emailFrom: String(patch.emailFrom ?? current.emailFrom).trim(),
     resendApiKey: String(patch.resendApiKey ?? current.resendApiKey).trim(),
     smtpHost: String(patch.smtpHost ?? current.smtpHost).trim(),
-    smtpPort: String(patch.smtpPort ?? current.smtpPort || "587").trim(),
+    smtpPort: String(patch.smtpPort ?? current.smtpPort ?? "587").trim(),
     smtpUser: String(patch.smtpUser ?? current.smtpUser).trim(),
     smtpPass: String(patch.smtpPass ?? current.smtpPass).trim(),
     smtpSecure: Boolean(patch.smtpSecure ?? current.smtpSecure),
