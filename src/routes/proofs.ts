@@ -41,6 +41,7 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   const proofType = field("proofType");
   const customerName = field("customerName");
   const address = field("address");
+  const ocrText = field("ocrText").slice(0, 200_000);
   const createdAtMillis = Number(field("createdAtMillis") || Date.now());
 
   const fileEntry = fields.file;
@@ -83,8 +84,8 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   db.prepare(
     `INSERT INTO proofs (
       proof_id, company_id, driver_id, driver_device_id, vehicle_id, route_run_id, stop_id,
-      proof_type, customer_name, address, file_name, file_path, mime_type, created_at, branch_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      proof_type, customer_name, address, file_name, file_path, mime_type, created_at, branch_id, ocr_text
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(proof_id) DO UPDATE SET
       driver_id = excluded.driver_id,
       route_run_id = excluded.route_run_id,
@@ -96,7 +97,11 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
       file_path = excluded.file_path,
       mime_type = excluded.mime_type,
       created_at = excluded.created_at,
-      branch_id = excluded.branch_id`
+      branch_id = excluded.branch_id,
+      ocr_text = CASE
+        WHEN length(excluded.ocr_text) > 0 THEN excluded.ocr_text
+        ELSE proofs.ocr_text
+      END`
   ).run(
     proofId,
     companyId,
@@ -112,7 +117,8 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     storedPath,
     mimeType,
     createdAtMillis,
-    branchId
+    branchId,
+    ocrText
   );
 
   const { notifyProofUploaded } = await import("../lib/route-notification-hooks.js");
@@ -143,6 +149,7 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
   const proofType = c.req.query("proofType")?.trim();
   const fromMillis = Number(c.req.query("fromMillis") ?? "");
   const toMillis = Number(c.req.query("toMillis") ?? "");
+  const searchQuery = c.req.query("q")?.trim() ?? "";
 
   const conditions = ["company_id = ?"];
   const params: Array<string | number> = [companyId];
@@ -196,13 +203,30 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
     params.push(toMillis);
   }
 
+  if (searchQuery) {
+    const like = `%${searchQuery.toLowerCase()}%`;
+    conditions.push(`(
+      LOWER(file_name) LIKE ? OR
+      LOWER(customer_name) LIKE ? OR
+      LOWER(address) LIKE ? OR
+      LOWER(proof_type) LIKE ? OR
+      LOWER(driver_id) LIKE ? OR
+      LOWER(vehicle_id) LIKE ? OR
+      LOWER(route_run_id) LIKE ? OR
+      LOWER(stop_id) LIKE ? OR
+      LOWER(ocr_text) LIKE ?
+    )`);
+    params.push(like, like, like, like, like, like, like, like, like);
+  }
+
   const rows = db
     .prepare(
       `SELECT proof_id AS proofId, company_id AS companyId, driver_id AS driverId,
               driver_device_id AS driverDeviceId, vehicle_id AS vehicleId,
               route_run_id AS routeRunId, stop_id AS stopId, proof_type AS proofType,
               customer_name AS customerName, address, file_name AS fileName,
-              file_path AS filePath, mime_type AS mimeType, created_at AS createdAtMillis
+              file_path AS filePath, mime_type AS mimeType, created_at AS createdAtMillis,
+              ocr_text AS ocrText, branch_id AS branchId
        FROM proofs
        WHERE ${conditions.join(" AND ")}
        ORDER BY created_at DESC

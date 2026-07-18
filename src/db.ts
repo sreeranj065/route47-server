@@ -203,6 +203,24 @@ function ensureGeofenceLinkageColumns() {
 
 ensureGeofenceLinkageColumns();
 
+function ensureProofSearchColumns() {
+  const columns = db
+    .prepare(`PRAGMA table_info(proofs)`)
+    .all() as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+
+  if (!names.has("ocr_text")) {
+    db.exec(`ALTER TABLE proofs ADD COLUMN ocr_text TEXT NOT NULL DEFAULT ''`);
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_proofs_company_created
+      ON proofs(company_id, created_at DESC);
+  `);
+}
+
+ensureProofSearchColumns();
+
 function ensureDailyReportAnalyticsColumns() {
   const columns = db
     .prepare(`PRAGMA table_info(daily_reports)`)
