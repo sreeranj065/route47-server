@@ -1,9 +1,11 @@
 /**
  * Transactional email helper for PIN recovery and similar notices.
- * Configure one of:
+ * Configure via Admin App (stored in DATA_DIR) or env:
  *   - RESEND_API_KEY + EMAIL_FROM
  *   - SMTP_HOST + SMTP_PORT + SMTP_USER + SMTP_PASS + EMAIL_FROM
  */
+
+import { readEmailSettings } from "./email-settings-store.js";
 
 export interface SendEmailInput {
   to: string;
@@ -11,18 +13,33 @@ export interface SendEmailInput {
   text: string;
 }
 
-function requireFromAddress(): string {
-  const from = process.env.EMAIL_FROM?.trim() || process.env.SMTP_FROM?.trim() || "";
+function resolvedConfig() {
+  const stored = readEmailSettings();
+  const emailFrom =
+    stored.emailFrom ||
+    process.env.EMAIL_FROM?.trim() ||
+    process.env.SMTP_FROM?.trim() ||
+    "";
+  const resendApiKey = stored.resendApiKey || process.env.RESEND_API_KEY?.trim() || "";
+  const smtpHost = stored.smtpHost || process.env.SMTP_HOST?.trim() || "";
+  const smtpPort = stored.smtpPort || process.env.SMTP_PORT?.trim() || "587";
+  const smtpUser = stored.smtpUser || process.env.SMTP_USER?.trim() || "";
+  const smtpPass = stored.smtpPass || process.env.SMTP_PASS?.trim() || "";
+  const smtpSecure =
+    stored.smtpSecure ||
+    process.env.SMTP_SECURE?.trim() === "true" ||
+    smtpPort === "465";
+  return { emailFrom, resendApiKey, smtpHost, smtpPort, smtpUser, smtpPass, smtpSecure };
+}
+
+function requireFromAddress(from: string): string {
   if (!from) {
     throw new Error("EMAIL_FROM is not configured on the company server.");
   }
   return from;
 }
 
-async function sendWithResend(input: SendEmailInput): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  if (!apiKey) throw new Error("RESEND_API_KEY is not configured.");
-
+async function sendWithResend(input: SendEmailInput, apiKey: string, from: string): Promise<void> {
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -30,7 +47,7 @@ async function sendWithResend(input: SendEmailInput): Promise<void> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: requireFromAddress(),
+      from: requireFromAddress(from),
       to: [input.to],
       subject: input.subject,
       text: input.text,
@@ -45,26 +62,21 @@ async function sendWithResend(input: SendEmailInput): Promise<void> {
   }
 }
 
-async function sendWithSmtp(input: SendEmailInput): Promise<void> {
-  const host = process.env.SMTP_HOST?.trim();
-  if (!host) throw new Error("SMTP_HOST is not configured.");
-
-  const port = Number.parseInt(process.env.SMTP_PORT?.trim() || "587", 10);
-  const user = process.env.SMTP_USER?.trim() || "";
-  const pass = process.env.SMTP_PASS?.trim() || "";
-  const secure = process.env.SMTP_SECURE?.trim() === "true" || port === 465;
-
-  // Dynamic import keeps nodemailer optional until SMTP is used.
+async function sendWithSmtp(
+  input: SendEmailInput,
+  cfg: ReturnType<typeof resolvedConfig>,
+): Promise<void> {
+  const port = Number.parseInt(cfg.smtpPort || "587", 10);
   const nodemailer = await import("nodemailer");
   const transporter = nodemailer.createTransport({
-    host,
+    host: cfg.smtpHost,
     port: Number.isFinite(port) ? port : 587,
-    secure,
-    auth: user ? { user, pass } : undefined,
+    secure: cfg.smtpSecure,
+    auth: cfg.smtpUser ? { user: cfg.smtpUser, pass: cfg.smtpPass } : undefined,
   });
 
   await transporter.sendMail({
-    from: requireFromAddress(),
+    from: requireFromAddress(cfg.emailFrom),
     to: input.to,
     subject: input.subject,
     text: input.text,
@@ -72,10 +84,8 @@ async function sendWithSmtp(input: SendEmailInput): Promise<void> {
 }
 
 export function isEmailDeliveryConfigured(): boolean {
-  return Boolean(
-    process.env.RESEND_API_KEY?.trim() ||
-      process.env.SMTP_HOST?.trim(),
-  );
+  const cfg = resolvedConfig();
+  return Boolean(cfg.emailFrom && (cfg.resendApiKey || cfg.smtpHost));
 }
 
 export async function sendTransactionalEmail(input: SendEmailInput): Promise<void> {
@@ -84,17 +94,18 @@ export async function sendTransactionalEmail(input: SendEmailInput): Promise<voi
     throw new Error("Invalid recipient email.");
   }
 
-  if (process.env.RESEND_API_KEY?.trim()) {
-    await sendWithResend({ ...input, to });
+  const cfg = resolvedConfig();
+  if (cfg.resendApiKey) {
+    await sendWithResend({ ...input, to }, cfg.resendApiKey, cfg.emailFrom);
     return;
   }
 
-  if (process.env.SMTP_HOST?.trim()) {
-    await sendWithSmtp({ ...input, to });
+  if (cfg.smtpHost) {
+    await sendWithSmtp({ ...input, to }, cfg);
     return;
   }
 
   throw new Error(
-    "Email delivery is not configured. Set RESEND_API_KEY + EMAIL_FROM, or SMTP_HOST + EMAIL_FROM on the company server.",
+    "Email delivery is not configured. In Admin → Server → Email delivery, set Resend or SMTP.",
   );
 }

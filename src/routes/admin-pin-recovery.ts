@@ -22,7 +22,7 @@ companyRoutes.post("/route47/companies/:companyId/admin/security/pin-recovery/se
     return c.json(
       {
         message:
-          "Email delivery is not configured on this company server. Set RESEND_API_KEY + EMAIL_FROM, or SMTP_HOST + EMAIL_FROM.",
+          "Email delivery is not configured. Open Admin → Settings → Server → Email delivery and add Resend or SMTP.",
       },
       503,
     );

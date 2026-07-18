@@ -25,6 +25,9 @@ services:
       ROUTE47_HOSTING_MODE: docker
       ROUTE47_SELF_UPDATE_ENABLED: "true"
       ROUTE47_COMPOSE_DIR: /host-compose
+      # Optional: PIN recovery email (or configure in Admin → Server → Email delivery)
+      # EMAIL_FROM: Route47 <onboarding@resend.dev>
+      # RESEND_API_KEY: re_xxxxxxxx
     volumes:
       - route47-data:/data
       # Uncomment for in-app self-update from the Admin App (VPS installs only):
