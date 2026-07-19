@@ -24,6 +24,8 @@ export interface AdminRow {
   disabled_at: number | null;
   created_at: number;
   redeemed_at: number | null;
+  /** Linked Route47 Admin Firebase UID for invitee reconnect (nullable). */
+  firebase_uid?: string | null;
 }
 
 /** SHA-256 hex digest — admin API keys are stored hashed at rest. */

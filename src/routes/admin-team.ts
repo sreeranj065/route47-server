@@ -426,7 +426,7 @@ companyRoutes.patch("/route47/companies/:companyId/admin/branches/:branchId", as
 export const adminInviteRoutes = new Hono();
 
 adminInviteRoutes.post("/route47/admin-invites/redeem", async (c) => {
-  const body = await c.req.json<{ inviteCode?: string }>();
+  const body = await c.req.json<{ inviteCode?: string; idToken?: string }>();
   const code = stringOr(body.inviteCode).trim();
   if (!code) return c.json({ message: "inviteCode is required" }, 400);
 
@@ -459,6 +459,18 @@ adminInviteRoutes.post("/route47/admin-invites/redeem", async (c) => {
     `UPDATE admins SET api_key = NULL, api_key_hash = ?, status = 'active', redeemed_at = ?, disabled_at = NULL WHERE id = ?`,
   ).run(hashAdminKey(apiKey), now(), admin.id);
 
+  // Best-effort: link Firebase for invitee reconnect when Admin sends idToken.
+  let firebaseBound = false;
+  if (body.idToken?.trim()) {
+    const { bindAdminAccount } = await import("../lib/admin-reconnect.js");
+    const bound = await bindAdminAccount({
+      companyId: company.id,
+      adminId: admin.id,
+      idToken: body.idToken.trim(),
+    });
+    firebaseBound = bound.ok;
+  }
+
   return c.json({
     message: "Invite redeemed.",
     apiKey,
@@ -469,6 +481,7 @@ adminInviteRoutes.post("/route47/admin-invites/redeem", async (c) => {
     role: admin.role,
     branchIds: getAdminBranchIds(company.id, admin.id),
     defaultBranchId: getAdminDefaultBranchId(company.id, admin.id),
+    firebaseBound,
   });
 });
 

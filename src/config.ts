@@ -85,6 +85,7 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
       "server-update",
       "backups",
       "owner-reconnect",
+      "admin-team-reconnect",
     ],
     ...disk,
     ...extra,

@@ -15,7 +15,9 @@ import { ensureDriverDeviceActivatedColumn } from "./lib/branch-filter.js";
 import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
 import { ownerClaimRoutes } from "./routes/admin-owner-reconnect.js";
+import { teamClaimRoutes } from "./routes/admin-team-reconnect.js";
 import "./routes/admin-owner-reconnect.js";
+import "./routes/admin-team-reconnect.js";
 import "./routes/admin-server-update.js";
 import "./routes/admin-backups.js";
 import "./routes/admin-pin-recovery.js";
@@ -103,6 +105,7 @@ app.route("/", authRoutes);
 app.route("/", companyRoutes);
 app.route("/", adminInviteRoutes);
 app.route("/", ownerClaimRoutes);
+app.route("/", teamClaimRoutes);
 
 app.notFound((c) => c.json({ message: `Not found: ${c.req.method} ${c.req.path}` }, 404));
 

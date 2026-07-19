@@ -92,3 +92,13 @@ Customers still rent Railway/Render themselves. The broker only calls their API 
 ## 8. Phase 4 — Admin server status pill
 
 Customer server **1.0.9+** `/health` includes `diskUsedPercent`, `diskWarningLevelPercent`, and `lastBackupAtMillis`. Admin shows a persistent green / amber / red bar above the bottom nav (and a compact pill on Home) while connected.
+
+## 9. Multi-branch admin invites + invitee reconnect (plan Phase 3)
+
+Customer server **1.0.10+**:
+
+- Team invites still created in Admin → Settings → Team (with branch access).
+- Share as **QR / `R47ADMIN:code@https://…` payload**.
+- Redeem accepts optional Firebase `idToken` and binds `admins.firebase_uid`.
+- Invitee reconnect: `POST …/admin/team/me/bind` and `POST /route47/admin/team/claim`.
+- Health `adminFeatures` includes `"admin-team-reconnect"`.
