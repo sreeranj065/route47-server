@@ -88,3 +88,7 @@ Repo: [`route47-deploy-broker`](../route47-deploy-broker) (sibling of this serve
 5. Guided deploy → Railway/Render → **One-click deploy** appears when the broker health reports `firebaseConfigured`.
 
 Customers still rent Railway/Render themselves. The broker only calls their API with their token and injects Firebase + admin key — Route47 does not host fleet data.
+
+## 8. Phase 4 — Admin server status pill
+
+Customer server **1.0.9+** `/health` includes `diskUsedPercent`, `diskWarningLevelPercent`, and `lastBackupAtMillis`. Admin shows a persistent green / amber / red bar above the bottom nav (and a compact pill on Home) while connected.

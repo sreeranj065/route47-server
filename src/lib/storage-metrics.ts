@@ -226,16 +226,57 @@ export function buildStorageMetrics(companyId: string, branchIds: string[]) {
   };
 }
 
-/** Lightweight disk summary for health payloads. */
+/** Newest backup mtime across host backup dir + operational `Backups` folders. */
+function findLatestBackupAtMillis(): number | null {
+  let latest: number | null = null;
+  const consider = (ms: number | null) => {
+    if (ms == null) return;
+    if (latest == null || ms > latest) latest = ms;
+  };
+
+  const hostBackupDir = process.env.ROUTE47_BACKUP_DIR?.trim();
+  if (hostBackupDir) consider(latestMtimeMillis(hostBackupDir));
+
+  // OPERATIONAL_DIR / {Company} / {Branch} / Backups
+  if (fs.existsSync(OPERATIONAL_DIR)) {
+    try {
+      for (const company of fs.readdirSync(OPERATIONAL_DIR, { withFileTypes: true })) {
+        if (!company.isDirectory()) continue;
+        const companyPath = path.join(OPERATIONAL_DIR, company.name);
+        let branches: fs.Dirent[];
+        try {
+          branches = fs.readdirSync(companyPath, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const branch of branches) {
+          if (!branch.isDirectory()) continue;
+          consider(latestMtimeMillis(path.join(companyPath, branch.name, "Backups")));
+        }
+      }
+    } catch {
+      /* ignore scan errors */
+    }
+  }
+
+  return latest;
+}
+
+/** Lightweight disk summary for health payloads (Admin status pill). */
 export function buildDiskHealthSummary() {
   const volume = readVolumeStats(DATA_DIR);
   const usedPercent =
     volume.totalBytes > 0 ? Math.round((volume.usedBytes / volume.totalBytes) * 1000) / 10 : 0;
+  const warnThresholds = getStorageWarnThresholds();
+  const warningLevelPercent =
+    warnThresholds.filter((t) => usedPercent >= t).pop() ?? null;
   return {
     diskTotalBytes: volume.totalBytes,
     diskUsedBytes: volume.usedBytes,
     diskAvailableBytes: volume.availableBytes,
     diskUsedPercent: usedPercent,
-    storageWarnThresholdsPercent: getStorageWarnThresholds(),
+    storageWarnThresholdsPercent: warnThresholds,
+    diskWarningLevelPercent: warningLevelPercent,
+    lastBackupAtMillis: findLatestBackupAtMillis(),
   };
 }
