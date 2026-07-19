@@ -41,6 +41,17 @@ say "2/5 Writing $INSTALL_DIR…"
 mkdir -p "$INSTALL_DIR"
 ADMIN_KEY="r47_$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
+# Optional vendor inject: export ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON before
+# running this installer so owner-reconnect works out of the box. Never bake
+# the JSON into the public script — customers do not set this themselves.
+FIREBASE_JSON_ENV=""
+if [ -n "${ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON:-}" ]; then
+  # Escape for YAML double-quoted string
+  FIREBASE_ESCAPED=$(printf '%s' "$ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  FIREBASE_JSON_ENV="
+      ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON: \"$FIREBASE_ESCAPED\""
+fi
+
 if [ -n "$DOMAIN" ]; then
   PUBLIC_URL="https://$DOMAIN"
   cat > "$INSTALL_DIR/Caddyfile" <<EOF
@@ -59,7 +70,7 @@ services:
       ROUTE47_PUBLIC_URL: $PUBLIC_URL
       ROUTE47_HOSTING_MODE: docker
       ROUTE47_SELF_UPDATE_ENABLED: "true"
-      ROUTE47_COMPOSE_DIR: /host-compose
+      ROUTE47_COMPOSE_DIR: /host-compose$FIREBASE_JSON_ENV
     volumes:
       - route47-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -95,7 +106,7 @@ services:
       ROUTE47_ADMIN_API_KEY: $ADMIN_KEY
       ROUTE47_HOSTING_MODE: docker
       ROUTE47_SELF_UPDATE_ENABLED: "true"
-      ROUTE47_COMPOSE_DIR: /host-compose
+      ROUTE47_COMPOSE_DIR: /host-compose$FIREBASE_JSON_ENV
     volumes:
       - route47-data:/data
       - /var/run/docker.sock:/var/run/docker.sock

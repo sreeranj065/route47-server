@@ -66,6 +66,7 @@ Set `ROUTE47_PUBLIC_URL` to that HTTPS domain so login responses hand drivers th
 | `DATA_DIR` | `<repo>/data` locally, `/data` in Docker | Single directory for ALL persistent state: SQLite DB + proof photos. Mount your volume here. |
 | `ROUTE47_DB_PATH` | `$DATA_DIR/route47.db` | Override the SQLite file path (rarely needed). |
 | `ROUTE47_ADMIN_API_KEY` | *(none — required)* | Admin API key (header `X-Route47-Admin-Key`). **Must be set before using the Admin app.** |
+| `ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON` | *(none)* | **Vendor-managed.** Full Firebase service-account JSON for project `route47-admin`. Enables Admin “Reconnect” after reinstall without pasting the API key. Customers do not set this — Route47 injects it on managed deploys. See [`VENDOR_SETUP.md`](./VENDOR_SETUP.md). |
 | `ROUTE47_PUBLIC_URL` | request origin (proxy-aware) | Public HTTPS URL returned to drivers on login/invite redemption. |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `EMAIL_FROM` | *(none)* | From-address for Admin PIN recovery emails. Required if email delivery is enabled. |
