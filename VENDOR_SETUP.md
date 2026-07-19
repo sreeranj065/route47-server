@@ -71,3 +71,20 @@ Admin “Set one up for me” opens these templates. Bake the Firebase JSON into
   ```
 
 - Or paste into `/opt/route47` compose env after install and `docker compose up -d`.
+
+## 7. Phase 3 — Deploy Broker (true one-click)
+
+Repo: [`route47-deploy-broker`](../route47-deploy-broker) (sibling of this server).
+
+1. Deploy the broker with the **same** `ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON`.
+2. Optionally set `RAILWAY_API_TOKEN` for internal tests only (customers normally paste their own Railway/Render token).
+3. In Admin build env set:
+
+   ```text
+   VITE_DEPLOY_BROKER_URL=https://your-broker.example
+   ```
+
+4. Rebuild Admin (`npm run build:mobile` + `npx cap sync android`).
+5. Guided deploy → Railway/Render → **One-click deploy** appears when the broker health reports `firebaseConfigured`.
+
+Customers still rent Railway/Render themselves. The broker only calls their API with their token and injects Firebase + admin key — Route47 does not host fleet data.

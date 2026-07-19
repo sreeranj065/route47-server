@@ -28,7 +28,7 @@ services:
       - key: ROUTE47_ADMIN_API_KEY
         generateValue: true # random admin key per deploy; view it in the Render dashboard
       # Vendor / managed deploys only — do NOT put the real JSON in git.
-      # Set in the Render dashboard (or via Route47 Deploy Broker in Phase 2)
+      # Set in the Render dashboard (or via Route47 Deploy Broker in Phase 3)
       # so Admin owner-reconnect works after reinstall.
       - key: ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
