@@ -12,9 +12,50 @@ import {
   sharedResourceIds,
 } from "../lib/branch-filter.js";
 import { buildProofFolderName, buildStoredProofPath } from "../proof-storage.js";
+import { extractPlainTextFromPdf } from "../lib/pdf-text.js";
 
 function requireAdmin(c: { get: (key: "admin") => import("../lib/admin-auth.js").AdminIdentity | undefined }) {
   return hasAdminAccess(c);
+}
+
+/** Fill empty ocr_text from searchable PDF layers so content search works for older uploads. */
+function backfillEmptyOcrText(companyId: string, limit = 120): number {
+  const rows = db
+    .prepare(
+      `SELECT proof_id AS proofId, file_path AS filePath, mime_type AS mimeType, file_name AS fileName
+       FROM proofs
+       WHERE company_id = ? AND length(TRIM(ocr_text)) = 0
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    )
+    .all(companyId, limit) as Array<{
+    proofId: string;
+    filePath: string;
+    mimeType: string;
+    fileName: string;
+  }>;
+
+  const updateOcr = db.prepare(
+    `UPDATE proofs SET ocr_text = ? WHERE company_id = ? AND proof_id = ? AND length(TRIM(ocr_text)) = 0`,
+  );
+
+  let updated = 0;
+  for (const row of rows) {
+    const isPdf =
+      (row.mimeType ?? "").includes("pdf") ||
+      (row.fileName ?? "").toLowerCase().endsWith(".pdf") ||
+      (row.filePath ?? "").toLowerCase().endsWith(".pdf");
+    if (!isPdf || !row.filePath || !fs.existsSync(row.filePath)) continue;
+    try {
+      const extracted = extractPlainTextFromPdf(fs.readFileSync(row.filePath));
+      if (!extracted) continue;
+      updateOcr.run(extracted, companyId, row.proofId);
+      updated += 1;
+    } catch {
+      // Best-effort.
+    }
+  }
+  return updated;
 }
 
 companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
@@ -41,7 +82,7 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   const proofType = field("proofType");
   const customerName = field("customerName");
   const address = field("address");
-  const ocrText = field("ocrText").slice(0, 200_000);
+  let ocrText = field("ocrText").slice(0, 200_000);
   const createdAtMillis = Number(field("createdAtMillis") || Date.now());
 
   const fileEntry = fields.file;
@@ -80,6 +121,11 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
     file.type && file.type !== "application/octet-stream"
       ? file.type
       : mimeFromName || "application/octet-stream";
+
+  // If the driver/admin omitted ocrText, recover searchable words from the PDF layer.
+  if (!ocrText.trim() && (mimeType.includes("pdf") || storedName.toLowerCase().endsWith(".pdf"))) {
+    ocrText = extractPlainTextFromPdf(buffer);
+  }
 
   db.prepare(
     `INSERT INTO proofs (
@@ -201,6 +247,12 @@ companyRoutes.get("/route47/companies/:companyId/proofs", (c) => {
   if (Number.isFinite(toMillis) && toMillis > 0) {
     conditions.push("created_at <= ?");
     params.push(toMillis);
+  }
+
+  // Backfill OCR from PDF text layers BEFORE applying `q`, so content search
+  // can find words inside older uploads that never stored ocr_text.
+  if (admin) {
+    backfillEmptyOcrText(companyId);
   }
 
   if (searchQuery) {
