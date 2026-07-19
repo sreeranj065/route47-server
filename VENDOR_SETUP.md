@@ -42,4 +42,32 @@ Firebase / service accounts stay vendor-only until Phase 2 injects this variable
 - Keep `package.json` `version` ≥ `1.0.8`.
 - Public templates document `ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON` as **optional for customers / required for vendor-managed deploys**.
 - Do **not** put the real JSON in `render.yaml`, `railway.json`, or the public installer.
-- Phase 2: Deploy Broker sets this env via Railway/Render APIs when creating a customer instance.
+
+## 6. Phase 2 — inject Firebase into official templates (required)
+
+Admin “Set one up for me” opens these templates. Bake the Firebase JSON into the **template defaults** once so every new customer server gets owner-reconnect without customers touching Firebase.
+
+### Railway template (`vast-red`)
+
+1. Open the template project that backs [railway.com/deploy/vast-red](https://railway.com/deploy/vast-red).
+2. Service → **Variables** → add `ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON` = your service-account JSON.
+3. Mark it as a **template variable** / shared config so new deploys inherit it (do not expose it in the public README).
+4. Ensure volume mount `/data`, `ROUTE47_ADMIN_API_KEY` generated per deploy, and healthcheck `/healthz`.
+5. Redeploy a fresh test from the template and confirm `/health` includes `"owner-reconnect"`.
+
+### Render Blueprint
+
+1. After a Blueprint deploy, set `ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON` in the service **Environment** (Render `sync: false` in `render.yaml` means you set it in the dashboard / via API).
+2. For fully automated customer deploys later, use a small Deploy Broker that calls the Render API to set this secret after Blueprint create.
+3. Until the broker exists, Route47 support can set the variable once per managed customer, or rely on Railway template inheritance for the default path.
+
+### VPS / DigitalOcean / Fly
+
+- Preferred: run installer with the secret already exported:
+
+  ```bash
+  export ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+  curl -fsSL https://raw.githubusercontent.com/sreeranj065/route47-server/main/scripts/install.sh | sudo -E sh
+  ```
+
+- Or paste into `/opt/route47` compose env after install and `docker compose up -d`.
