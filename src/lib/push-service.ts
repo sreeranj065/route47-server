@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import type { RecipientType } from "./notification-types.js";
+import { getFirebaseAdminApp } from "./firebase-admin-app.js";
 
 export interface PushPayload {
   notificationId: string;
@@ -11,38 +12,8 @@ export interface PushPayload {
   data: Record<string, string>;
 }
 
-let firebaseAdmin: typeof import("firebase-admin") | null = null;
-let firebaseInitAttempted = false;
-
 async function getFirebaseAdmin() {
-  if (firebaseInitAttempted) return firebaseAdmin;
-  firebaseInitAttempted = true;
-
-  const json = process.env.ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
-  const path = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
-  if (!json && !path) {
-    return null;
-  }
-
-  try {
-    const admin = await import("firebase-admin");
-    if (admin.apps.length === 0) {
-      if (json) {
-        admin.initializeApp({
-          credential: admin.credential.cert(JSON.parse(json) as import("firebase-admin").ServiceAccount),
-        });
-      } else {
-        admin.initializeApp({
-          credential: admin.credential.applicationDefault(),
-        });
-      }
-    }
-    firebaseAdmin = admin;
-    return admin;
-  } catch (error) {
-    console.warn("Firebase Admin SDK unavailable — push delivery will be in-app only.", error);
-    return null;
-  }
+  return getFirebaseAdminApp();
 }
 
 function listTokens(companyId: string, recipientType: RecipientType, recipientId: string): string[] {

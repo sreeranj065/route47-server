@@ -39,9 +39,13 @@ export function countLicensedAdminSeats(companyId: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS c FROM admins
-       WHERE company_id = ? AND status IN ('invited', 'active') AND disabled_at IS NULL`,
+       WHERE company_id = ?
+         AND status IN ('invited', 'active')
+         AND disabled_at IS NULL
+         AND id NOT LIKE 'owner-fb-%'`,
     )
     .get(companyId) as { c: number };
+  // +1 for the env/bootstrap owner seat (not stored as a normal admin row).
   return row.c + 1;
 }
 

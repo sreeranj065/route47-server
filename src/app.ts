@@ -14,6 +14,8 @@ import "./routes/branch-sharing.js";
 import { ensureDriverDeviceActivatedColumn } from "./lib/branch-filter.js";
 import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
+import { ownerClaimRoutes } from "./routes/admin-owner-reconnect.js";
+import "./routes/admin-owner-reconnect.js";
 import "./routes/admin-server-update.js";
 import "./routes/admin-backups.js";
 import "./routes/admin-pin-recovery.js";
@@ -100,6 +102,7 @@ app.get("/healthz", (c) => {
 app.route("/", authRoutes);
 app.route("/", companyRoutes);
 app.route("/", adminInviteRoutes);
+app.route("/", ownerClaimRoutes);
 
 app.notFound((c) => c.json({ message: `Not found: ${c.req.method} ${c.req.path}` }, 404));
 
