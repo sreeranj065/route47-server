@@ -221,6 +221,20 @@ function ensureProofSearchColumns() {
 
 ensureProofSearchColumns();
 
+function ensureDriverLoginPasswordColumn() {
+  const columns = db
+    .prepare(`PRAGMA table_info(drivers)`)
+    .all() as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+  if (!names.has("login_password")) {
+    // Admin-visible driver password so fleets can re-share credentials.
+    // Auth still uses password_hash; login_password mirrors the last set value.
+    db.exec(`ALTER TABLE drivers ADD COLUMN login_password TEXT NOT NULL DEFAULT ''`);
+  }
+}
+
+ensureDriverLoginPasswordColumn();
+
 function ensureDailyReportAnalyticsColumns() {
   const columns = db
     .prepare(`PRAGMA table_info(daily_reports)`)

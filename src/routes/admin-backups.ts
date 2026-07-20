@@ -12,7 +12,8 @@ import {
   resolveBackupFile,
   restoreBranchBackup,
 } from "../lib/branch-backup.js";
-import { readBackupSettings, writeBackupSettings } from "../lib/backup-settings-store.js";
+import { readBackupSettings, writeBackupSettings, type BackupCadence } from "../lib/backup-settings-store.js";
+import { purgeBranchProofFiles } from "../lib/purge-proof-files.js";
 import { NOTIFICATION_TYPES } from "../lib/notification-types.js";
 import { notifyAllAdmins } from "../lib/notification-service.js";
 import { companyRoutes } from "./auth.js";
@@ -47,16 +48,70 @@ companyRoutes.put("/route47/companies/:companyId/admin/backups/settings", async 
 
   const body = await c.req.json<{
     autoBackupEnabled?: boolean;
+    scheduleCadence?: BackupCadence | string;
     scheduleHourLocal?: number;
     retainCount?: number;
   }>();
 
   const saved = writeBackupSettings(companyId, {
     autoBackupEnabled: body.autoBackupEnabled,
+    scheduleCadence: body.scheduleCadence as BackupCadence | undefined,
     scheduleHourLocal: body.scheduleHourLocal,
     retainCount: body.retainCount,
   });
   return c.json(saved);
+});
+
+/**
+ * Delete POD / Pickup / Receipt files only (after an automatic backup).
+ * Never touches drivers, geofences, team, licenses, routes, trips, etc.
+ */
+companyRoutes.post("/route47/companies/:companyId/admin/storage/purge-proofs", async (c) => {
+  const admin = getAdmin(c);
+  if (!admin) return c.json({ message: "Admin API key required." }, 401);
+  if (!requireAdminRole(admin, "owner", "admin")) {
+    return c.json({ message: "Only owners and admins can delete proof files." }, 403);
+  }
+
+  const companyId = c.req.param("companyId");
+  if (!getCompany(companyId)) return c.json({ message: "Company not found." }, 404);
+
+  const body = await c.req.json<{ branchId?: string; confirm?: boolean }>();
+  const branchId = body.branchId?.trim() ?? "";
+  if (!branchId) return c.json({ message: "branchId is required." }, 400);
+  if (body.confirm !== true) {
+    return c.json({ message: "confirm: true is required." }, 400);
+  }
+  if (!adminCanAccessBranch(companyId, admin, branchId)) {
+    return c.json({ message: "You do not have access to this branch." }, 403);
+  }
+
+  try {
+    const result = purgeBranchProofFiles({ companyId, branchId });
+    notifyAllAdmins(
+      companyId,
+      NOTIFICATION_TYPES.BACKUP_READY,
+      "Proof files deleted",
+      `POD / Pickup / Receipt files were deleted for this branch. A backup was saved first (${result.backupId}).`,
+      { branchId, backupId: result.backupId },
+      { branchId, priority: "high" },
+    );
+    return c.json({
+      ok: true,
+      message: `Deleted ${result.deletedProofRows} proof record(s). Backup ${result.backupId} created first.`,
+      ...result,
+    });
+  } catch (error) {
+    return c.json(
+      {
+        message:
+          error instanceof Error
+            ? error.message
+            : "Could not delete proof files (backup may have failed).",
+      },
+      500,
+    );
+  }
 });
 
 companyRoutes.get("/route47/companies/:companyId/admin/backups", (c) => {

@@ -33,7 +33,7 @@ export interface BackupManifest {
   displayName: string;
   createdAtMillis: number;
   serverVersion: string;
-  trigger: "manual" | "scheduled" | "pre-restore";
+  trigger: "manual" | "scheduled" | "pre-restore" | "pre-purge";
   fileCount: number;
   dbExportSha256: string;
   note?: string;

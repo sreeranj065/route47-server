@@ -22,6 +22,7 @@ type DriverRow = {
   username: string;
   vehicleId: string;
   branchId: string;
+  loginPassword?: string;
 };
 
 type DriverPatchBody = {
@@ -55,6 +56,7 @@ function mapDriverRecord(companyId: string, row: DriverRow, index: number) {
     id: row.id,
     name: row.displayName || row.username || "Driver",
     username: row.username,
+    password: row.loginPassword || undefined,
     status: driverStatus(companyId, row.id),
     vehicleId: row.vehicleId || plan?.vehicle_id || "",
     branchId: row.branchId || "",
@@ -122,13 +124,24 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     const now = Date.now();
 
     db.prepare(
-      `INSERT INTO drivers (id, company_id, username, password_hash, display_name, vehicle_id, branch_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(driverId, companyId, username, hashPassword(password), displayName, vehicleId, branchId, now);
+      `INSERT INTO drivers (id, company_id, username, password_hash, login_password, display_name, vehicle_id, branch_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      driverId,
+      companyId,
+      username,
+      hashPassword(password),
+      password,
+      displayName,
+      vehicleId,
+      branchId,
+      now,
+    );
 
     const row = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
+                login_password AS loginPassword
          FROM drivers WHERE company_id = ? AND id = ?`,
       )
       .get(companyId, driverId) as DriverRow;
@@ -136,6 +149,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     return c.json({
       ...mapDriverRecord(companyId, row, 0),
       username,
+      password,
       phone: body.phone?.trim() ?? "",
       temporaryPassword: password,
       message: "Driver created.",
@@ -152,7 +166,8 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     const accessibleIds = listAccessibleDriverIds(companyId, admin);
     const rows = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
+                login_password AS loginPassword
          FROM drivers
          WHERE company_id = ?
          ORDER BY display_name ASC, username ASC`,
@@ -183,7 +198,8 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const row = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
+                login_password AS loginPassword
          FROM drivers
          WHERE company_id = ? AND id = ?`,
       )
@@ -214,7 +230,8 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const row = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
+                login_password AS loginPassword
          FROM drivers
          WHERE company_id = ? AND id = ?`,
       )
@@ -244,16 +261,22 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
       username = requested;
     }
 
-    const passwordHash = body.password?.trim()
-      ? hashPassword(body.password.trim())
-      : null;
-
-    if (passwordHash) {
+    const newPassword = body.password?.trim() || "";
+    if (newPassword) {
       db.prepare(
         `UPDATE drivers
-         SET display_name = ?, vehicle_id = ?, username = ?, password_hash = ?, branch_id = ?
+         SET display_name = ?, vehicle_id = ?, username = ?, password_hash = ?, login_password = ?, branch_id = ?
          WHERE company_id = ? AND id = ?`,
-      ).run(displayName, vehicleId, username, passwordHash, branchId, companyId, driverId);
+      ).run(
+        displayName,
+        vehicleId,
+        username,
+        hashPassword(newPassword),
+        newPassword,
+        branchId,
+        companyId,
+        driverId,
+      );
     } else {
       db.prepare(
         `UPDATE drivers
@@ -264,7 +287,8 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
 
     const updated = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
+        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
+                login_password AS loginPassword
          FROM drivers
          WHERE company_id = ? AND id = ?`,
       )

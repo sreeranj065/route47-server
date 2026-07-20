@@ -1,16 +1,14 @@
 /**
- * In-process nightly per-branch backups. Does not block request handling —
- * work runs on a timer and each branch is backed up sequentially with yields.
+ * In-process scheduled per-branch backups (weekly / biweekly / monthly).
  */
 import { db } from "../db.js";
 import { listCompanyBranches } from "./admin-auth.js";
 import { createBranchBackup } from "./branch-backup.js";
-import { readBackupSettings } from "./backup-settings-store.js";
+import { readBackupSettings, writeBackupSettings, type BackupCadence } from "./backup-settings-store.js";
 import { NOTIFICATION_TYPES } from "./notification-types.js";
 import { notifyAllAdmins } from "./notification-service.js";
 
 let timer: ReturnType<typeof setInterval> | null = null;
-const ranDayKeys = new Set<string>();
 let running = false;
 
 function listCompanyIds(): string[] {
@@ -19,8 +17,29 @@ function listCompanyIds(): string[] {
   );
 }
 
-function dayKey(d = new Date()): string {
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+function cadenceMs(cadence: BackupCadence): number {
+  switch (cadence) {
+    case "biweekly":
+      return 14 * 24 * 60 * 60 * 1000;
+    case "monthly":
+      return 30 * 24 * 60 * 60 * 1000;
+    case "weekly":
+    default:
+      return 7 * 24 * 60 * 60 * 1000;
+  }
+}
+
+function dueForSchedule(
+  cadence: BackupCadence,
+  lastScheduledAtMillis: number | undefined,
+  now: Date,
+): boolean {
+  if (lastScheduledAtMillis == null || !Number.isFinite(lastScheduledAtMillis)) {
+    // First run: only fire at/after the configured hour so we don't dump
+    // backups the second auto-backup is enabled.
+    return now.getHours() >= 0; // allow; hour gate is applied separately
+  }
+  return now.getTime() - lastScheduledAtMillis >= cadenceMs(cadence);
 }
 
 async function runScheduledBackups() {
@@ -33,25 +52,28 @@ async function runScheduledBackups() {
 
       const now = new Date();
       if (now.getHours() !== settings.scheduleHourLocal) continue;
-      const key = `${companyId}:${dayKey(now)}`;
-      if (ranDayKeys.has(key)) continue;
-      // Mark early so a slow run doesn't double-fire within the hour.
-      ranDayKeys.add(key);
-      if (ranDayKeys.size > 200) {
-        const prefix = dayKey(now);
-        for (const entry of [...ranDayKeys]) {
-          if (!entry.endsWith(prefix)) ranDayKeys.delete(entry);
-        }
+      if (!dueForSchedule(settings.scheduleCadence, settings.lastScheduledAtMillis, now)) {
+        continue;
       }
 
+      // Mark before work so a slow run doesn't double-fire within the hour.
+      writeBackupSettings(companyId, { lastScheduledAtMillis: now.getTime() });
+
       const branches = listCompanyBranches(companyId);
+      const label =
+        settings.scheduleCadence === "biweekly"
+          ? "bi-weekly"
+          : settings.scheduleCadence === "monthly"
+            ? "monthly"
+            : "weekly";
+
       for (const branch of branches) {
         try {
           const item = createBranchBackup({
             companyId,
             branchId: branch.id,
             trigger: "scheduled",
-            note: "Automatic nightly backup",
+            note: `Automatic ${label} backup`,
           });
           notifyAllAdmins(
             companyId,
@@ -71,7 +93,6 @@ async function runScheduledBackups() {
             error instanceof Error ? error.message : error,
           );
         }
-        // Yield between branches so live traffic stays responsive.
         await new Promise((r) => setTimeout(r, 250));
       }
     }
@@ -83,13 +104,11 @@ async function runScheduledBackups() {
 /** Call once at process start. Safe to call multiple times. */
 export function startBackupScheduler() {
   if (timer) return;
-  // Check every 10 minutes; runs at most once per company per local day.
   timer = setInterval(() => {
     void runScheduledBackups();
   }, 10 * 60 * 1000);
-  // Opportunistic check shortly after boot (non-blocking).
   setTimeout(() => {
     void runScheduledBackups();
   }, 45_000);
-  console.log("Backup scheduler started (per-branch nightly).");
+  console.log("Backup scheduler started (weekly / biweekly / monthly).");
 }
