@@ -9,7 +9,7 @@
 #   2. Creates /opt/route47 with a docker-compose.yml running the OFFICIAL
 #      Route47 server image + Caddy for automatic HTTPS.
 #   3. Generates a random admin API key.
-#   4. Sets up a nightly backup of the data volume and an update.sh helper.
+#   4. Sets up a weekly backup of the data volume and an update.sh helper.
 #   5. Prints the server URL + admin key to paste into the Route47 Admin App.
 #
 # The customer owns this machine and this deployment entirely — Route47 has
@@ -132,7 +132,7 @@ chmod +x "$INSTALL_DIR/update.sh"
 
 cat > "$INSTALL_DIR/backup.sh" <<'EOF'
 #!/bin/sh
-# Nightly snapshot of the Route47 data volume (SQLite DB + proof photos).
+# Weekly snapshot of the Route47 data volume (SQLite DB + proof photos).
 set -eu
 cd "$(dirname "$0")"
 mkdir -p backups
@@ -144,8 +144,9 @@ ls -1t backups/route47-data-*.tar.gz 2>/dev/null | tail -n +15 | xargs -r rm --
 EOF
 chmod +x "$INSTALL_DIR/backup.sh"
 
-# Nightly backup at 03:17 (idempotent cron entry).
-CRON_LINE="17 3 * * * $INSTALL_DIR/backup.sh >/dev/null 2>&1"
+# Weekly volume backup — Sundays at 03:17 (idempotent cron entry).
+# Product branch archives (Admin → Backup & Restore) use weekly/biweekly/monthly.
+CRON_LINE="17 3 * * 0 $INSTALL_DIR/backup.sh >/dev/null 2>&1"
 ( crontab -l 2>/dev/null | grep -vF "$INSTALL_DIR/backup.sh" ; echo "$CRON_LINE" ) | crontab -
 
 say "4/5 Starting Route47 server…"
@@ -166,7 +167,7 @@ cat <<EOF
  (Server Setup → "I have my server URL").
 
  Update later : $INSTALL_DIR/update.sh
- Backups      : nightly to $INSTALL_DIR/backups/
+ Backups      : weekly to $INSTALL_DIR/backups/
  Health check : $PUBLIC_URL/healthz
 ============================================================
 EOF

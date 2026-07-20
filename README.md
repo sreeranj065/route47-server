@@ -32,7 +32,7 @@ Railway deploys this repo cleanly via [`railway.json`](./railway.json) (Dockerfi
 
 ## Deploy on your own VPS (Hetzner, DigitalOcean, Lightsail…)
 
-**One-line installer** (Docker + Caddy HTTPS + nightly backups + update helper) — host [`scripts/install.sh`](./scripts/install.sh) at `get.route47.app`:
+**One-line installer** (Docker + Caddy HTTPS + weekly backups + update helper) — host [`scripts/install.sh`](./scripts/install.sh) at `get.route47.app`:
 
 ```bash
 curl -fsSL https://get.route47.app | sh

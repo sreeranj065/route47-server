@@ -183,7 +183,16 @@ export function adminHasBranchAccess(companyId: string, adminId: string, branchI
 }
 
 export function setAdminBranchIds(companyId: string, adminId: string, branchIds: string[]) {
-  const previousDefault = getAdminDefaultBranchId(companyId, adminId);
+  // Only reuse a previously marked default if this admin already has access rows.
+  // Do NOT fall back to the company primary branch here — that made invited teammates
+  // keep the main branch as base even when invited to another branch.
+  const existingDefault = db
+    .prepare(
+      `SELECT branch_id AS branchId FROM admin_branch_access
+       WHERE company_id = ? AND admin_id = ? AND is_default = 1
+       LIMIT 1`,
+    )
+    .get(companyId, adminId) as { branchId?: string } | undefined;
 
   db.prepare(`DELETE FROM admin_branch_access WHERE company_id = ? AND admin_id = ?`).run(
     companyId,
@@ -196,6 +205,7 @@ export function setAdminBranchIds(companyId: string, adminId: string, branchIds:
      VALUES (?, ?, ?, ?, ?)`,
   );
   const now = Date.now();
+  const previousDefault = existingDefault?.branchId;
   const nextDefault =
     previousDefault && branchIds.includes(previousDefault)
       ? previousDefault
@@ -217,6 +227,18 @@ export function getAdminDefaultBranchId(companyId: string, adminId: string): str
     .get(companyId, adminId) as { branchId?: string } | undefined;
 
   if (row?.branchId) return row.branchId;
+
+  // Assigned branch without is_default flag — use first access row, not company primary.
+  const firstAssigned = db
+    .prepare(
+      `SELECT branch_id AS branchId FROM admin_branch_access
+       WHERE company_id = ? AND admin_id = ?
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    )
+    .get(companyId, adminId) as { branchId?: string } | undefined;
+  if (firstAssigned?.branchId) return firstAssigned.branchId;
+
   return ensureDefaultBranch(companyId).id;
 }
 

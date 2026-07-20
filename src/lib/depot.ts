@@ -82,7 +82,11 @@ function loadBranch(companyId: string, branchId: string): BranchRow {
   return row ?? ensureDefaultBranch(companyId);
 }
 
-/** Resolve the depot a driver should use, falling back to the primary branch coords. */
+/**
+ * Resolve the depot for a driver's assigned branch.
+ * Name/address always come from that branch (not the company main branch).
+ * Coordinates fall back to primary only when the assigned branch has none yet.
+ */
 export function resolveDriverDepot(
   companyId: string,
   driverId: string,
@@ -94,11 +98,8 @@ export function resolveDriverDepot(
   const branch = loadBranch(companyId, branchId);
   const primary = ensureDefaultBranch(companyId);
 
-  const address =
-    branch.address?.trim() ||
-    primary.address?.trim() ||
-    "";
-  const name = branch.name?.trim() || primary.name?.trim() || "Head Office";
+  const address = branch.address?.trim() || "";
+  const name = branch.name?.trim() || "Branch";
 
   let latitude = branch.latitude ?? null;
   let longitude = branch.longitude ?? null;
