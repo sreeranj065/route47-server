@@ -20,6 +20,7 @@ import "./routes/admin-owner-reconnect.js";
 import "./routes/admin-team-reconnect.js";
 import "./routes/admin-server-update.js";
 import "./routes/admin-backups.js";
+import "./routes/admin-safety.js";
 import "./routes/admin-pin-recovery.js";
 import "./routes/admin-email-settings.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";

@@ -21,6 +21,7 @@ import {
 } from "../lib/branch-filter.js";
 import { getDriverBranchId } from "../branch-storage.js";
 import { resolveDriverDepot } from "../lib/depot.js";
+import { effectiveThresholds, readSafetySettings } from "../lib/safety-settings-store.js";
 import {
   ensureDefaultBranch,
   getAdminBranchIds,
@@ -392,6 +393,8 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
     ? resolveDriverDepot(companyId, sessionDriverId)
     : null;
 
+  const safetySettings = readSafetySettings(companyId);
+
   return c.json({
     message: "Admin snapshot ready.",
     snapshot: {
@@ -402,6 +405,8 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       geofences,
       rejectedGeofenceIds,
       depot,
+      safetySettings,
+      safetyEffectiveThresholds: effectiveThresholds(safetySettings),
     },
   });
 });
