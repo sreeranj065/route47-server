@@ -19,12 +19,17 @@ export interface SafetySettings {
   cooldownMs: number;
   /** When true, drivers show on-device feedback and use a shorter cooldown. */
   testMode: boolean;
+  /**
+   * When true, driver phones open the indoor accel/gyro gesture listener
+   * (Admin starts this; drivers only record — no demo UI on the phone).
+   */
+  phoneMotionDemoEnabled: boolean;
   updatedAtMillis?: number;
 }
 
 const PRESET_VALUES: Record<
   SafetyPreset,
-  Omit<SafetySettings, "preset" | "testMode" | "updatedAtMillis">
+  Omit<SafetySettings, "preset" | "testMode" | "phoneMotionDemoEnabled" | "updatedAtMillis">
 > = {
   sensitive: {
     brakeMultiplier: 0.75,
@@ -53,6 +58,7 @@ const DEFAULTS: SafetySettings = {
   preset: "balanced",
   ...PRESET_VALUES.balanced,
   testMode: false,
+  phoneMotionDemoEnabled: false,
 };
 
 function clampMultiplier(value: unknown, fallback: number): number {
@@ -82,6 +88,7 @@ export function presetDefaults(preset: SafetyPreset): SafetySettings {
     preset,
     ...PRESET_VALUES[preset],
     testMode: false,
+    phoneMotionDemoEnabled: false,
   };
 }
 
@@ -96,6 +103,7 @@ export function readSafetySettings(companyId: string): SafetySettings {
       collisionMultiplier: clampMultiplier(raw.collisionMultiplier, DEFAULTS.collisionMultiplier),
       cooldownMs: clampCooldown(raw.cooldownMs, DEFAULTS.cooldownMs),
       testMode: Boolean(raw.testMode),
+      phoneMotionDemoEnabled: Boolean(raw.phoneMotionDemoEnabled),
       updatedAtMillis: typeof raw.updatedAtMillis === "number" ? raw.updatedAtMillis : undefined,
     };
   } catch {
@@ -115,6 +123,7 @@ export function writeSafetySettings(
     next = {
       ...presetDefaults(preset),
       testMode: patch.testMode ?? current.testMode,
+      phoneMotionDemoEnabled: patch.phoneMotionDemoEnabled ?? current.phoneMotionDemoEnabled,
       updatedAtMillis: Date.now(),
     };
   } else {
@@ -126,6 +135,7 @@ export function writeSafetySettings(
       collisionMultiplier: clampMultiplier(patch.collisionMultiplier, current.collisionMultiplier),
       cooldownMs: clampCooldown(patch.cooldownMs, current.cooldownMs),
       testMode: patch.testMode ?? current.testMode,
+      phoneMotionDemoEnabled: patch.phoneMotionDemoEnabled ?? current.phoneMotionDemoEnabled,
       updatedAtMillis: Date.now(),
     };
   }

@@ -53,6 +53,7 @@ companyRoutes.put("/route47/companies/:companyId/admin/safety-settings", async (
     collisionMultiplier?: number;
     cooldownMs?: number;
     testMode?: boolean;
+    phoneMotionDemoEnabled?: boolean;
     applyPreset?: boolean;
   }>();
 
@@ -64,6 +65,7 @@ companyRoutes.put("/route47/companies/:companyId/admin/safety-settings", async (
     collisionMultiplier: body.collisionMultiplier,
     cooldownMs: body.cooldownMs,
     testMode: body.testMode,
+    phoneMotionDemoEnabled: body.phoneMotionDemoEnabled,
     applyPreset: body.applyPreset,
   });
 
@@ -97,7 +99,12 @@ companyRoutes.delete("/route47/companies/:companyId/admin/safety-demo-events", (
   for (const row of rows) {
     try {
       const meta = JSON.parse(row.metadataJson || "{}") as Record<string, unknown>;
-      if (meta.source === "safety-demo" || meta.demo === true || meta.demo === "true") {
+      if (
+        meta.source === "safety-demo" ||
+        meta.source === "phone-motion-demo" ||
+        meta.demo === true ||
+        meta.demo === "true"
+      ) {
         toDelete.push(row.eventId);
       }
     } catch {

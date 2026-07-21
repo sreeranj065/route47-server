@@ -77,12 +77,19 @@ companyRoutes.post("/route47/companies/:companyId/activity/sync", async (c) => {
     const eventId = event.eventId?.trim();
     if (!eventId) continue;
 
-    const driverId = event.driverId?.trim() || sessionDriverId;
+    let driverId = event.driverId?.trim() || sessionDriverId;
     if (!driverId) continue;
 
-    const driver = db
+    let driver = db
       .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
       .get(companyId, driverId);
+    // Prefer the authenticated session driver when the payload id is a device id / stale id.
+    if (!driver && sessionDriverId && sessionDriverId !== driverId) {
+      driverId = sessionDriverId;
+      driver = db
+        .prepare(`SELECT id FROM drivers WHERE company_id = ? AND id = ?`)
+        .get(companyId, driverId);
+    }
     if (!driver) continue;
 
     insert.run(
@@ -285,7 +292,22 @@ companyRoutes.get("/route47/companies/:companyId/drivers/:driverId/activity", (c
   );
 
   if (eventType) {
-    events = events.filter((event) => String(event.eventType).includes(eventType));
+    const needle = eventType.toUpperCase();
+    events = events.filter((event) => {
+      const type = String(event.eventType ?? "").toUpperCase();
+      // Admin "Safety" chip is a group, not a stored event_type value.
+      if (needle === "SAFETY") {
+        return (
+          type.includes("HARSH_BRAK") ||
+          type.includes("HARD_ACCEL") ||
+          type.includes("SHARP_TURN") ||
+          type.includes("POSSIBLE_COLLISION") ||
+          type.includes("COLLISION") ||
+          type.includes("SPEEDING")
+        );
+      }
+      return type.includes(needle);
+    });
   }
 
   return c.json({
