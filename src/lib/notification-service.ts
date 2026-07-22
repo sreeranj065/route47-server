@@ -172,7 +172,11 @@ export function createNotification(input: CreateNotificationInput): string {
     isSilent ||
     isPreferenceEnabled(input.companyId, input.recipientType, input.recipientId, category)
   ) {
-    queuePushDelivery(id);
+    const wakeNow =
+      isSilent ||
+      input.type === NOTIFICATION_TYPES.SYNC_SILENT ||
+      COLLAPSIBLE_TYPES.has(input.type);
+    queuePushDelivery(id, { immediate: wakeNow });
   }
 
   return id;
@@ -264,12 +268,18 @@ export function notifyAllAdmins(
   return ids;
 }
 
-function queuePushDelivery(notificationId: string) {
-  setImmediate(() => {
+function queuePushDelivery(notificationId: string, options?: { immediate?: boolean }) {
+  const run = () =>
     deliverPush(notificationId).catch((err) => {
       console.warn(`Push delivery failed for ${notificationId}:`, err);
     });
-  });
+  // Silent / plan-wake pushes must not wait on the event loop tick — drivers
+  // otherwise fall back to a multi-second poll before seeing Current List edits.
+  if (options?.immediate) {
+    void run();
+    return;
+  }
+  setImmediate(run);
 }
 
 export async function deliverPush(notificationId: string): Promise<boolean> {

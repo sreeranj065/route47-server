@@ -83,7 +83,12 @@ export async function sendPushToRecipients(input: {
         await admin.messaging().send({
           token,
           data,
-          android: { priority: "high" },
+          android: {
+            priority: "high",
+            // Keep the wake fresh — stale silent syncs sitting in FCM queues
+            // are why drivers wait ~30s for Current List updates.
+            ttl: 120,
+          },
         });
       } else {
         await admin.messaging().send({
@@ -95,6 +100,7 @@ export async function sendPushToRecipients(input: {
           data,
           android: {
             priority: input.payload.priority === "high" ? "high" : "normal",
+            ttl: 120,
             notification: {
               channelId: input.payload.category,
             },
