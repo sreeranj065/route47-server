@@ -724,6 +724,8 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
     vehicleId?: string;
     status?: string;
     stops?: unknown[];
+    /** Driver's last known server plan updatedAt (ms). Used for admin-wins conflict. */
+    baseUpdatedAtMillis?: number;
   }>();
 
   const driverId = String(body.driverId ?? c.get("driverId") ?? "").trim();
@@ -736,12 +738,49 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
   }
 
   const vehicleId = String(body.vehicleId ?? c.get("vehicleId") ?? "").trim();
-  const stops = Array.isArray(body.stops) ? body.stops : [];
+  const incomingStops = Array.isArray(body.stops) ? body.stops : [];
   const now = Date.now();
 
   const existing = db
-    .prepare(`SELECT stops_json AS stopsJson FROM route_plans WHERE company_id = ? AND route_run_id = ?`)
-    .get(companyId, routeRunId) as { stopsJson?: string } | undefined;
+    .prepare(
+      `SELECT stops_json AS stopsJson, updated_at AS updatedAt
+       FROM route_plans WHERE company_id = ? AND route_run_id = ?`,
+    )
+    .get(companyId, routeRunId) as { stopsJson?: string; updatedAt?: number } | undefined;
+
+  let stops = incomingStops;
+  let adminWins = false;
+  const baseUpdatedAt = Number(body.baseUpdatedAtMillis) || 0;
+  const existingUpdatedAt = Number(existing?.updatedAt) || 0;
+
+  if (existing?.stopsJson && existingUpdatedAt > 0 && baseUpdatedAt > 0 && existingUpdatedAt > baseUpdatedAt) {
+    // Admin published after the driver's last download — keep admin membership,
+    // merge driver status fields onto stops that still exist.
+    adminWins = true;
+    try {
+      const existingStops = JSON.parse(existing.stopsJson || "[]") as Array<Record<string, unknown>>;
+      const incomingById = new Map<string, Record<string, unknown>>();
+      for (const raw of incomingStops) {
+        const stop = raw as Record<string, unknown>;
+        const id = String(stop.stopId ?? stop.id ?? "").trim();
+        if (id) incomingById.set(id, stop);
+      }
+      stops = existingStops.map((serverStop) => {
+        const id = String(serverStop.stopId ?? serverStop.id ?? "").trim();
+        const fromDriver = id ? incomingById.get(id) : undefined;
+        if (!fromDriver) return serverStop;
+        return {
+          ...serverStop,
+          stopStatus: fromDriver.stopStatus ?? fromDriver.status ?? serverStop.stopStatus,
+          notes: fromDriver.notes ?? serverStop.notes,
+          poNumber: fromDriver.poNumber ?? serverStop.poNumber,
+        };
+      });
+    } catch {
+      stops = incomingStops;
+      adminWins = false;
+    }
+  }
 
   db.prepare(
     `INSERT INTO route_plans (
@@ -762,8 +801,10 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
     routeDateIso,
     String(body.status ?? "in_progress"),
     JSON.stringify(stops),
-    now,
-    now
+    // Preserve published_at / updated_at when admin wins so the next driver
+    // download still sees the admin revision as newer.
+    adminWins ? (existingUpdatedAt || now) : now,
+    adminWins ? existingUpdatedAt : now
   );
 
   if (driverId) {
@@ -779,8 +820,11 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
   });
 
   return c.json({
-    message: "Driver route plan synced.",
+    message: adminWins
+      ? "Driver route plan synced (admin membership preserved)."
+      : "Driver route plan synced.",
     routeRunId,
     stopCount: stops.length,
+    adminWins,
   });
 });

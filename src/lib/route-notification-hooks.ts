@@ -63,6 +63,7 @@ export function notifyRoutePlanPublished(input: {
       { routeRunId, stopCount: String(stopCount) },
       { priority: "high" },
     );
+    notifySilentSync(companyId, driverId, routeRunId);
     notifyAllAdmins(
       companyId,
       NOTIFICATION_TYPES.ROUTE_ASSIGNED,
@@ -93,6 +94,7 @@ export function notifyRoutePlanPublished(input: {
       { routeRunId, stopCount: String(stopCount) },
       { priority: "high" },
     );
+    notifySilentSync(companyId, driverId, routeRunId);
     notifyAllAdmins(
       companyId,
       NOTIFICATION_TYPES.ROUTE_REASSIGNED,
@@ -112,6 +114,8 @@ export function notifyRoutePlanPublished(input: {
     `Your current list now has ${stopCount} stop${stopCount === 1 ? "" : "s"}.`,
     { routeRunId, stopCount: String(stopCount) },
   );
+  // Data-only wake so the driver pulls the new list without waiting for the 30s poll.
+  notifySilentSync(companyId, driverId, routeRunId);
   notifyAllAdmins(
     companyId,
     NOTIFICATION_TYPES.STOPS_CHANGED,

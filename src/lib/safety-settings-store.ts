@@ -153,7 +153,8 @@ export function effectiveThresholds(settings: SafetySettings) {
     harshBrakingMinSpeedDropKmh: Number((12 * settings.brakeMultiplier).toFixed(1)),
     hardAccelMinMs2: Number((3.0 * settings.accelMultiplier).toFixed(2)),
     hardAccelMinSpeedGainKmh: Number((8 * settings.accelMultiplier).toFixed(1)),
-    sharpTurnMinGyroRadS: Number((2.0 * settings.turnMultiplier).toFixed(2)),
+    sharpTurnMinGyroRadS: Number((0.95 * settings.turnMultiplier).toFixed(2)),
+    sharpTurnMaxGyroRadS: Number((2.75 / Math.max(0.5, settings.turnMultiplier)).toFixed(2)),
     collisionMinAccelMs2: Number((7.0 * settings.collisionMultiplier).toFixed(2)),
     cooldownMs: settings.testMode
       ? Math.min(settings.cooldownMs, 12_000)

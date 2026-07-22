@@ -91,9 +91,12 @@ export function createNotification(input: CreateNotificationInput): string {
     createdAt,
   );
 
+  const isSilent =
+    Boolean(input.silent) || input.type === NOTIFICATION_TYPES.SYNC_SILENT;
+
+  // Visible notifications respect preference toggles; silent sync always wakes the device.
   if (
-    !input.silent &&
-    input.type !== NOTIFICATION_TYPES.SYNC_SILENT &&
+    isSilent ||
     isPreferenceEnabled(input.companyId, input.recipientType, input.recipientId, category)
   ) {
     queuePushDelivery(id);
@@ -242,11 +245,11 @@ export async function retryFailedPushDeliveries(limit = 25) {
   const rows = db
     .prepare(
       `SELECT id FROM notifications
-       WHERE push_sent_at IS NULL AND push_attempts < 5 AND type != ?
+       WHERE push_sent_at IS NULL AND push_attempts < 5
        ORDER BY created_at ASC
        LIMIT ?`,
     )
-    .all(NOTIFICATION_TYPES.SYNC_SILENT, limit) as Array<{ id: string }>;
+    .all(limit) as Array<{ id: string }>;
 
   for (const row of rows) {
     await deliverPush(row.id);
