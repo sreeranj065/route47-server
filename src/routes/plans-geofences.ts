@@ -852,5 +852,6 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
     routeRunId,
     stopCount: stops.length,
     adminWins,
+    updatedAtMillis: adminWins ? (existingUpdatedAt || now) : now,
   });
 });
