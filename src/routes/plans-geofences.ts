@@ -29,6 +29,26 @@ import {
   type BranchRow,
 } from "../lib/admin-auth.js";
 
+/** Stable stop-id set for detecting real list edits vs status-only syncs. */
+function stopMembershipKey(stopsJsonOrArray: string | unknown[] | undefined): string {
+  try {
+    const stops = Array.isArray(stopsJsonOrArray)
+      ? stopsJsonOrArray
+      : JSON.parse(String(stopsJsonOrArray || "[]"));
+    if (!Array.isArray(stops)) return "";
+    return stops
+      .map((raw) => {
+        const stop = raw as Record<string, unknown>;
+        return String(stop.stopId ?? stop.id ?? "").trim();
+      })
+      .filter(Boolean)
+      .sort()
+      .join("|");
+  } catch {
+    return "";
+  }
+}
+
 /** Route plans explicitly shared to any of the given branches, excluding ones already loaded. */
 function loadSharedRoutePlans(
   companyId: string,
@@ -811,13 +831,19 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
     deleteDuplicateRoutePlansForDriverDay(companyId, driverId, routeDateIso, routeRunId);
   }
 
-  notifyDriverRoutePlanSynced({
-    companyId,
-    routeRunId,
-    driverId,
-    stopCount: stops.length,
-    isNew: !existing,
-  });
+  // Only alert admins when stop membership actually changed. Routine open-app /
+  // status syncs must not spam "current list updated" notifications.
+  const previousMembership = stopMembershipKey(existing?.stopsJson);
+  const nextMembership = stopMembershipKey(JSON.stringify(stops));
+  if (!existing || previousMembership !== nextMembership) {
+    notifyDriverRoutePlanSynced({
+      companyId,
+      routeRunId,
+      driverId,
+      stopCount: stops.length,
+      isNew: !existing,
+    });
+  }
 
   return c.json({
     message: adminWins

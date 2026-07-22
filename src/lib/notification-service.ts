@@ -64,35 +64,108 @@ function isPreferenceEnabled(
   return row ? row.enabled === 1 : true;
 }
 
+/** Types that should update one unread row per recipient+routeRunId instead of stacking. */
+const COLLAPSIBLE_TYPES = new Set<string>([
+  NOTIFICATION_TYPES.CURRENT_LIST_ASSIGNED,
+  NOTIFICATION_TYPES.CURRENT_LIST_UPDATED,
+  NOTIFICATION_TYPES.STOPS_CHANGED,
+  NOTIFICATION_TYPES.ROUTE_ASSIGNED,
+  NOTIFICATION_TYPES.ROUTE_REASSIGNED,
+  NOTIFICATION_TYPES.ROUTE_CANCELLED,
+]);
+
+function shouldCollapse(type: string, silent?: boolean): boolean {
+  if (silent || type === NOTIFICATION_TYPES.SYNC_SILENT) return false;
+  return COLLAPSIBLE_TYPES.has(type);
+}
+
+/**
+ * Insert or refresh an unread notification so list-update spam becomes one row
+ * per (recipient, type, routeRunId).
+ */
 export function createNotification(input: CreateNotificationInput): string {
-  const id = rid("notif");
   const category = input.category ?? TYPE_CATEGORY[input.type] ?? "system";
   const priority = input.priority ?? "normal";
   const dataJson = JSON.stringify(input.data ?? {});
   const createdAt = now();
-
-  db.prepare(
-    `INSERT INTO notifications (
-      id, company_id, recipient_type, recipient_id, type, category, priority,
-      title, body, data_json, branch_id, read_at, created_at, push_sent_at, push_attempts, push_last_error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, 0, NULL)`,
-  ).run(
-    id,
-    input.companyId,
-    input.recipientType,
-    input.recipientId,
-    input.type,
-    category,
-    priority,
-    input.title,
-    input.body,
-    dataJson,
-    input.branchId ?? "",
-    createdAt,
-  );
-
+  const routeRunId = String(input.data?.routeRunId ?? "").trim();
   const isSilent =
     Boolean(input.silent) || input.type === NOTIFICATION_TYPES.SYNC_SILENT;
+
+  let id = rid("notif");
+  let reused = false;
+
+  if (shouldCollapse(input.type, input.silent) && routeRunId) {
+    const existing = db
+      .prepare(
+        `SELECT id, title, body, data_json AS dataJson FROM notifications
+         WHERE company_id = ?
+           AND recipient_type = ?
+           AND recipient_id = ?
+           AND type = ?
+           AND read_at IS NULL
+           AND instr(data_json, ?) > 0
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(
+        input.companyId,
+        input.recipientType,
+        input.recipientId,
+        input.type,
+        `"routeRunId":"${routeRunId}"`,
+      ) as { id: string; title: string; body: string; dataJson: string } | undefined;
+
+    if (existing?.id) {
+      id = existing.id;
+      const sameContent =
+        existing.title === input.title &&
+        existing.body === input.body &&
+        existing.dataJson === dataJson;
+      // Skip re-push when nothing meaningful changed (stops open-app / republish spam).
+      if (sameContent) {
+        return id;
+      }
+      reused = true;
+      db.prepare(
+        `UPDATE notifications
+         SET title = ?, body = ?, data_json = ?, category = ?, priority = ?,
+             branch_id = ?, created_at = ?, push_sent_at = NULL, push_attempts = 0, push_last_error = NULL
+         WHERE id = ?`,
+      ).run(
+        input.title,
+        input.body,
+        dataJson,
+        category,
+        priority,
+        input.branchId ?? "",
+        createdAt,
+        id,
+      );
+    }
+  }
+
+  if (!reused) {
+    db.prepare(
+      `INSERT INTO notifications (
+        id, company_id, recipient_type, recipient_id, type, category, priority,
+        title, body, data_json, branch_id, read_at, created_at, push_sent_at, push_attempts, push_last_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, 0, NULL)`,
+    ).run(
+      id,
+      input.companyId,
+      input.recipientType,
+      input.recipientId,
+      input.type,
+      category,
+      priority,
+      input.title,
+      input.body,
+      dataJson,
+      input.branchId ?? "",
+      createdAt,
+    );
+  }
 
   // Visible notifications respect preference toggles; silent sync always wakes the device.
   if (
@@ -146,9 +219,13 @@ export function notifyAllAdmins(
     .all(companyId) as Array<{ id: string }>;
 
   const ids: string[] = [];
+  const notifiedRecipientIds = new Set<string>();
 
-  if (!branchId || adminHasBranchAccess(companyId, "owner", branchId)) {
-    const ownerData = { ...data, adminId: "owner" };
+  // Prefer real admin rows. Only use legacy recipientId "owner" when no active admins exist.
+  const hasRealAdmins = admins.length > 0;
+
+  if (!hasRealAdmins && (!branchId || adminHasBranchAccess(companyId, "owner", branchId))) {
+    notifiedRecipientIds.add("owner");
     ids.push(
       createNotification({
         companyId,
@@ -157,7 +234,7 @@ export function notifyAllAdmins(
         type,
         title,
         body,
-        data: ownerData,
+        data: { ...data, adminId: "owner" },
         branchId: options?.branchId,
         priority: options?.priority,
       }),
@@ -167,6 +244,8 @@ export function notifyAllAdmins(
   for (const admin of admins) {
     if (options?.excludeAdminId && admin.id === options.excludeAdminId) continue;
     if (branchId && !adminHasBranchAccess(companyId, admin.id, branchId)) continue;
+    if (notifiedRecipientIds.has(admin.id)) continue;
+    notifiedRecipientIds.add(admin.id);
     ids.push(
       createNotification({
         companyId,

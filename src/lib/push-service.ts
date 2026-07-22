@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import type { RecipientType } from "./notification-types.js";
+import { NOTIFICATION_TYPES, type RecipientType } from "./notification-types.js";
 import { getFirebaseAdminApp } from "./firebase-admin-app.js";
 
 export interface PushPayload {
@@ -10,6 +10,25 @@ export interface PushPayload {
   title: string;
   body: string;
   data: Record<string, string>;
+}
+
+/**
+ * List/route updates must be data-only so the app (not the OS) posts the tray
+ * alert — otherwise background delivery never marks read and open-app poll
+ * duplicates the same event.
+ */
+const DATA_ONLY_TYPES = new Set<string>([
+  NOTIFICATION_TYPES.SYNC_SILENT,
+  NOTIFICATION_TYPES.CURRENT_LIST_ASSIGNED,
+  NOTIFICATION_TYPES.CURRENT_LIST_UPDATED,
+  NOTIFICATION_TYPES.STOPS_CHANGED,
+  NOTIFICATION_TYPES.ROUTE_ASSIGNED,
+  NOTIFICATION_TYPES.ROUTE_REASSIGNED,
+  NOTIFICATION_TYPES.ROUTE_CANCELLED,
+]);
+
+function shouldSendDataOnly(type: string, silent?: boolean): boolean {
+  return Boolean(silent) || DATA_ONLY_TYPES.has(type);
 }
 
 async function getFirebaseAdmin() {
@@ -44,11 +63,14 @@ export async function sendPushToRecipients(input: {
     return { ok: false, sent: 0, error: "FCM not configured on server" };
   }
 
+  const dataOnly = shouldSendDataOnly(input.payload.type, input.silent);
   const data: Record<string, string> = {
     notificationId: input.payload.notificationId,
     type: input.payload.type,
     category: input.payload.category,
     priority: input.payload.priority,
+    title: input.payload.title ?? "",
+    body: input.payload.body ?? "",
     ...input.payload.data,
   };
 
@@ -57,7 +79,7 @@ export async function sendPushToRecipients(input: {
 
   for (const token of tokens) {
     try {
-      if (input.silent) {
+      if (dataOnly) {
         await admin.messaging().send({
           token,
           data,
