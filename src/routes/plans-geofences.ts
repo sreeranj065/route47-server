@@ -773,12 +773,30 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
   const baseUpdatedAt = Number(body.baseUpdatedAtMillis) || 0;
   const existingUpdatedAt = Number(existing?.updatedAt) || 0;
 
-  if (existing?.stopsJson && existingUpdatedAt > 0 && baseUpdatedAt > 0 && existingUpdatedAt > baseUpdatedAt) {
-    // Admin published after the driver's last download — keep admin membership,
-    // merge driver status fields onto stops that still exist.
+  const existingMembership = stopMembershipKey(existing?.stopsJson);
+  const incomingMembership = stopMembershipKey(JSON.stringify(incomingStops));
+  const incomingIsStrictSubset =
+    Boolean(existing?.stopsJson) &&
+    existingMembership.length > 0 &&
+    incomingMembership.length > 0 &&
+    incomingMembership !== existingMembership &&
+    incomingMembership.split("|").every((id) => id && existingMembership.split("|").includes(id)) &&
+    incomingMembership.split("|").length < existingMembership.split("|").length;
+
+  // Admin published after the driver's last known revision, OR a stale driver
+  // push is trying to shrink the list after admin added stops.
+  const shouldPreserveAdminMembership =
+    Boolean(existing?.stopsJson) &&
+    existingUpdatedAt > 0 &&
+    (
+      (baseUpdatedAt > 0 && existingUpdatedAt > baseUpdatedAt) ||
+      (incomingIsStrictSubset && baseUpdatedAt > 0 && existingUpdatedAt >= baseUpdatedAt)
+    );
+
+  if (shouldPreserveAdminMembership) {
     adminWins = true;
     try {
-      const existingStops = JSON.parse(existing.stopsJson || "[]") as Array<Record<string, unknown>>;
+      const existingStops = JSON.parse(existing!.stopsJson || "[]") as Array<Record<string, unknown>>;
       const incomingById = new Map<string, Record<string, unknown>>();
       for (const raw of incomingStops) {
         const stop = raw as Record<string, unknown>;
