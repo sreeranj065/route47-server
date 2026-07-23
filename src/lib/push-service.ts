@@ -63,10 +63,10 @@ export async function sendPushToRecipients(input: {
 
   const admin = await getFirebaseAdmin();
   if (!admin) {
-    console.warn(
-      "[push] FCM not configured — set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON on the customer server",
-    );
-    return { ok: false, sent: 0, error: "FCM not configured on server" };
+    const { getFirebaseInitError } = await import("./firebase-admin-app.js");
+    const detail = getFirebaseInitError() || "set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON";
+    console.warn(`[push] FCM not configured — ${detail}`);
+    return { ok: false, sent: 0, error: `FCM not configured on server: ${detail}` };
   }
 
   const dataOnly = shouldSendDataOnly(input.payload.type, input.silent);

@@ -4,6 +4,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  getFirebaseInitError,
+  getPushCredentialDiagnostics,
+  isFirebaseAdminConfigured,
+} from "./lib/firebase-admin-app.js";
 import { buildDiskHealthSummary } from "./lib/storage-metrics.js";
 import { getRunningCommitSha, getSelfUpdateConfig } from "./lib/server-self-update.js";
 
@@ -62,12 +67,18 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     disk = {};
   }
 
-  // Without this env var, FCM never leaves the server — apps only see chat
-  // alerts while they are open and polling.
-  const pushConfigured = Boolean(
-    process.env.ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON?.trim() ||
-      process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim(),
-  );
+  // True only when the service-account JSON parses (not merely "env is set").
+  // A bad Railway paste used to show pushConfigured:true while FCM send failed.
+  const pushConfigured = isFirebaseAdminConfigured();
+  const pushInitError = getFirebaseInitError();
+  const pushCred = getPushCredentialDiagnostics();
+  const pushCredential = {
+    source: pushCred.source,
+    chars: pushCred.chars,
+    looksLikeJson: pushCred.looksLikeJson,
+    parseOk: pushCred.parseOk,
+    ...(pushCred.projectId ? { projectId: pushCred.projectId } : {}),
+  };
 
   return {
     ok: true,
@@ -83,6 +94,8 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     gitCommitSha: getRunningCommitSha(),
     serverTimeMillis: Date.now(),
     pushConfigured,
+    pushCredential,
+    ...(pushInitError ? { pushInitError } : {}),
     adminFeatures: [
       "drivers-roster",
       "drivers-create",

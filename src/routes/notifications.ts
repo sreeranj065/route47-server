@@ -65,8 +65,14 @@ companyRoutes.get("/route47/companies/:companyId/notifications/push-status", asy
   const recipient = resolveRecipient(c);
   if (!recipient) return c.json({ message: "Authentication required." }, 401);
 
-  const { isFirebaseAdminConfigured } = await import("../lib/firebase-admin-app.js");
+  const {
+    getFirebaseAdminApp,
+    getFirebaseInitError,
+    isFirebaseAdminConfigured,
+  } = await import("../lib/firebase-admin-app.js");
+  await getFirebaseAdminApp();
   const pushConfigured = isFirebaseAdminConfigured();
+  const pushInitError = getFirebaseInitError();
   const tokenCount = (
     db
       .prepare(
@@ -116,16 +122,19 @@ companyRoutes.get("/route47/companies/:companyId/notifications/push-status", asy
 
   return c.json({
     pushConfigured,
+    pushInitError,
     tokenCount,
     recipientType: recipient.recipientType,
     recipientId: recipient.recipientId,
     companyTokens,
     companyAdminTokens: companyTokens.filter((row) => row.recipientType === "admin"),
     companyDriverTokens: driverTokenRows,
-    backgroundPushReady: pushConfigured && tokenCount > 0,
+    backgroundPushReady: pushConfigured && tokenCount > 0 && !pushInitError,
     recentFailures,
-    hint: !pushConfigured
-      ? "Set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON on the customer server (same Firebase project as the apps: route47-admin)."
+    hint: pushInitError
+      ? `Firebase Admin failed to start: ${pushInitError}`
+      : !pushConfigured
+      ? "Set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON on the customer server (Firebase → Project settings → Service accounts → Generate new private key for project route47-admin). Paste the entire JSON as the variable value."
       : tokenCount === 0 && recipient.recipientType === "admin" && ownerTokenCount > 0
         ? "FCM tokens exist under recipientId owner, but this session resolves to a different admin id. Redeploy customer server ≥1.0.11 (owner always notified)."
       : tokenCount === 0 && recipient.recipientType === "driver"
