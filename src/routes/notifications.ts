@@ -76,18 +76,22 @@ companyRoutes.get("/route47/companies/:companyId/notifications/push-status", asy
       .get(companyId, recipient.recipientType, recipient.recipientId) as { c: number }
   ).c;
 
-  const companyTokens =
-    recipient.recipientType === "admin"
-      ? (db
-          .prepare(
-            `SELECT recipient_id AS recipientId, COUNT(*) AS c, MAX(last_seen_at) AS lastSeenAt
-             FROM push_tokens
-             WHERE company_id = ? AND recipient_type = 'admin'
-             GROUP BY recipient_id
-             ORDER BY lastSeenAt DESC`,
-          )
-          .all(companyId) as Array<{ recipientId: string; c: number; lastSeenAt: number }>)
-      : [];
+  const companyTokens = db
+    .prepare(
+      `SELECT recipient_type AS recipientType, recipient_id AS recipientId,
+              COUNT(*) AS c, MAX(last_seen_at) AS lastSeenAt, MAX(platform) AS platform
+       FROM push_tokens
+       WHERE company_id = ?
+       GROUP BY recipient_type, recipient_id
+       ORDER BY lastSeenAt DESC`,
+    )
+    .all(companyId) as Array<{
+      recipientType: string;
+      recipientId: string;
+      c: number;
+      lastSeenAt: number;
+      platform: string;
+    }>;
 
   const recentFailures = db
     .prepare(
@@ -107,23 +111,107 @@ companyRoutes.get("/route47/companies/:companyId/notifications/push-status", asy
     }>;
 
   const ownerTokenCount =
-    companyTokens.find((row) => row.recipientId === "owner")?.c ?? 0;
+    companyTokens.find((row) => row.recipientType === "admin" && row.recipientId === "owner")?.c ?? 0;
+  const driverTokenRows = companyTokens.filter((row) => row.recipientType === "driver");
 
   return c.json({
     pushConfigured,
     tokenCount,
     recipientType: recipient.recipientType,
     recipientId: recipient.recipientId,
-    companyAdminTokens: companyTokens,
+    companyTokens,
+    companyAdminTokens: companyTokens.filter((row) => row.recipientType === "admin"),
+    companyDriverTokens: driverTokenRows,
     backgroundPushReady: pushConfigured && tokenCount > 0,
     recentFailures,
     hint: !pushConfigured
       ? "Set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON on the customer server (same Firebase project as the apps: route47-admin)."
       : tokenCount === 0 && recipient.recipientType === "admin" && ownerTokenCount > 0
         ? "FCM tokens exist under recipientId owner, but this session resolves to a different admin id. Redeploy customer server ≥1.0.11 (owner always notified)."
+      : tokenCount === 0 && recipient.recipientType === "driver"
+        ? "This driver has no FCM token yet. On the Driver app: Settings → Fleet Connection → Fix message alerts. Allow notifications when prompted."
       : tokenCount === 0
         ? "Open this app once while connected to the company server so it can register an FCM token. Then check Railway logs for [push] No tokens…"
+        : recipient.recipientType === "admin" && driverTokenRows.length === 0
+          ? "Admin push looks ready, but no driver tokens are registered yet — Admin→Driver alerts will not reach phones until drivers tap Fix message alerts."
         : "Push looks ready — background message alerts should appear in the notification shade.",
+  });
+});
+
+/** Admin-only: send a one-shot test chat push to a driver (or self if omitted). */
+companyRoutes.post("/route47/companies/:companyId/notifications/push-test", async (c) => {
+  const admin = c.get("admin");
+  if (!admin) return c.json({ message: "Admin API key required." }, 401);
+
+  const companyId = c.req.param("companyId");
+  const body = await c.req.json<{ driverId?: string }>().catch(() => ({} as { driverId?: string }));
+  const driverId = body.driverId?.trim() ?? "";
+
+  const { notifyDriver, notifyAllAdmins, deliverPush } = await import("../lib/notification-service.js");
+  const { NOTIFICATION_TYPES } = await import("../lib/notification-types.js");
+
+  let notificationId: string | null = null;
+  if (driverId) {
+    notificationId = notifyDriver(
+      companyId,
+      driverId,
+      NOTIFICATION_TYPES.MESSAGE,
+      "Route47 test alert",
+      "If you see this in the shade with the Driver app in the background, push is working.",
+      { messageId: `test-${Date.now()}`, driverId, conversationDriverId: driverId },
+      { priority: "high" },
+    );
+  } else {
+    const ids = notifyAllAdmins(
+      companyId,
+      NOTIFICATION_TYPES.MESSAGE,
+      "Route47 test alert",
+      "If you see this in the shade with Admin in the background, push is working.",
+      { messageId: `test-${Date.now()}` },
+      { priority: "high" },
+    );
+    notificationId = ids[0] ?? null;
+  }
+
+  if (!notificationId) {
+    return c.json({ message: "Failed to create test notification." }, 500);
+  }
+
+  // deliverPush is already queued; wait a tick then report stored error/success.
+  await new Promise((r) => setTimeout(r, 400));
+  const row = db
+    .prepare(
+      `SELECT push_sent_at AS pushSentAt, push_last_error AS pushLastError, push_attempts AS pushAttempts
+       FROM notifications WHERE id = ?`,
+    )
+    .get(notificationId) as
+    | { pushSentAt: number | null; pushLastError: string | null; pushAttempts: number }
+    | undefined;
+
+  // Retry once inline if the async queue hasn't finished.
+  if (row && row.pushSentAt == null && !row.pushLastError) {
+    await deliverPush(notificationId);
+  }
+  const after = db
+    .prepare(
+      `SELECT push_sent_at AS pushSentAt, push_last_error AS pushLastError, push_attempts AS pushAttempts
+       FROM notifications WHERE id = ?`,
+    )
+    .get(notificationId) as
+    | { pushSentAt: number | null; pushLastError: string | null; pushAttempts: number }
+    | undefined;
+
+  return c.json({
+    message: after?.pushSentAt
+      ? "Test push sent."
+      : after?.pushLastError
+        ? `Test push failed: ${after.pushLastError}`
+        : "Test notification created; check Railway logs for [push].",
+    notificationId,
+    target: driverId ? { recipientType: "driver", recipientId: driverId } : { recipientType: "admin" },
+    pushSentAt: after?.pushSentAt ?? null,
+    pushLastError: after?.pushLastError ?? null,
+    pushAttempts: after?.pushAttempts ?? 0,
   });
 });
 

@@ -125,8 +125,20 @@ export async function sendPushToRecipients(input: {
       }
       sent += 1;
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-      if (/not-registered|invalid-registration|registration-token-not-registered/i.test(lastError)) {
+      const err = error as { code?: string; message?: string; errorInfo?: { code?: string; message?: string } };
+      lastError =
+        err?.errorInfo?.message ||
+        err?.message ||
+        (error instanceof Error ? error.message : String(error));
+      const code = err?.errorInfo?.code || err?.code || "";
+      console.warn(
+        `[push] FCM send failed recipient=${input.recipientType}/${input.recipientId} type=${input.payload.type} code=${code} err=${lastError}`,
+      );
+      if (
+        /not-registered|invalid-registration|registration-token-not-registered|messaging\/registration-token-not-registered/i.test(
+          `${code} ${lastError}`,
+        )
+      ) {
         db.prepare(`DELETE FROM push_tokens WHERE token = ?`).run(token);
       }
     }
