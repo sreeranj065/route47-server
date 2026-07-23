@@ -77,7 +77,11 @@ app.use(
   })
 );
 
-app.get("/health", (c) => c.json(buildHealthPayload()));
+app.get("/health", async (c) => {
+  const { getFirebaseAdminApp } = await import("./lib/firebase-admin-app.js");
+  await getFirebaseAdminApp();
+  return c.json(buildHealthPayload());
+});
 
 // Minimal unauthenticated probe for hosting platforms (Render healthCheckPath,
 // Railway healthcheck). /health stays as the richer payload used by the apps.

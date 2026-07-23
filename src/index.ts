@@ -35,3 +35,11 @@ console.log("  set ROUTE47_PUBLIC_URL=https://your-ngrok-url");
 
 serve({ fetch: app.fetch, port, hostname });
 startBackupScheduler();
+
+// Warm Firebase Admin at boot so the first chat push doesn't hit a cold ESM interop path.
+void import("./lib/firebase-admin-app.js").then(({ getFirebaseAdminApp }) =>
+  getFirebaseAdminApp().then((ready) => {
+    if (ready) console.log("Firebase Admin: ready for FCM push");
+    else console.warn("Firebase Admin: not ready — background push disabled until credentials init succeeds");
+  }),
+);

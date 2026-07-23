@@ -7,14 +7,32 @@
  * Also supported:
  *   ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON=<raw json, ideally one line>
  *   GOOGLE_APPLICATION_CREDENTIALS=<path>
+ *
+ * Note: under Node ESM (`"type": "module"`), `import("firebase-admin")` returns
+ * `{ default: admin }`. Using `.apps` on the module namespace throws
+ * "Cannot read properties of undefined (reading 'length')".
  */
 
 import { Buffer } from "node:buffer";
 
-let firebaseAdmin: typeof import("firebase-admin") | null = null;
+type FirebaseAdmin = typeof import("firebase-admin");
+
+let firebaseAdmin: FirebaseAdmin | null = null;
 let firebaseInitAttempted = false;
 let firebaseInitError: string | null = null;
 let firebaseCredentialSource: "json" | "base64" | "adc" | "none" = "none";
+
+async function loadFirebaseAdmin(): Promise<FirebaseAdmin> {
+  const mod = await import("firebase-admin");
+  // CJS/ESM interop: real API lives on .default when loaded from an ESM package.
+  const admin = ((mod as { default?: FirebaseAdmin }).default ?? mod) as FirebaseAdmin;
+  if (!admin || typeof admin.initializeApp !== "function" || !admin.apps) {
+    throw new Error(
+      "firebase-admin module loaded incorrectly (missing initializeApp/apps). Check the firebase-admin dependency.",
+    );
+  }
+  return admin;
+}
 
 function stripWrappingQuotes(raw: string): string {
   let value = raw.trim();
@@ -52,12 +70,8 @@ function normalizePrivateKey(parsed: Record<string, unknown>): void {
   const key = (parsed.private_key ?? parsed.privateKey) as string | undefined;
   if (typeof key !== "string" || !key) return;
 
-  // JSON files use "\n" escapes; some hosts turn those into real newlines already.
-  // Firebase Admin needs real PEM newlines.
   let normalized = key;
-  if (normalized.includes("\\n") && !normalized.includes("-----BEGIN")) {
-    // rare mangled form — leave as-is and let cert() fail with a clear error
-  } else if (normalized.includes("\\n")) {
+  if (normalized.includes("\\n")) {
     normalized = normalized.replace(/\\n/g, "\n");
   }
   parsed.private_key = normalized;
@@ -78,7 +92,6 @@ export function parseServiceAccountJson(raw: string):
   }
 
   let text = trimmed;
-  // Sometimes the whole JSON was pasted as a JSON string value.
   if (text.startsWith('"') && text.endsWith('"')) {
     try {
       const unquoted = JSON.parse(text) as unknown;
@@ -120,14 +133,28 @@ export function getPushCredentialDiagnostics(): {
   projectId?: string;
   parseOk: boolean;
   parseError?: string;
+  sdkReady?: boolean;
 } {
   const path = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
   const { raw, source } = resolveServiceAccountRaw();
   if (!raw && path) {
-    return { source: "adc", chars: 0, looksLikeJson: false, parseOk: true };
+    return {
+      source: "adc",
+      chars: 0,
+      looksLikeJson: false,
+      parseOk: true,
+      sdkReady: firebaseAdmin != null,
+    };
   }
   if (!raw) {
-    return { source: "none", chars: 0, looksLikeJson: false, parseOk: false, parseError: "No credentials env set." };
+    return {
+      source: "none",
+      chars: 0,
+      looksLikeJson: false,
+      parseOk: false,
+      parseError: "No credentials env set.",
+      sdkReady: false,
+    };
   }
   const parsed = parseServiceAccountJson(raw);
   if (!parsed.ok) {
@@ -137,6 +164,7 @@ export function getPushCredentialDiagnostics(): {
       looksLikeJson: raw.trimStart().startsWith("{"),
       parseOk: false,
       parseError: parsed.error,
+      sdkReady: false,
     };
   }
   const projectId = String(
@@ -150,6 +178,7 @@ export function getPushCredentialDiagnostics(): {
     looksLikeJson: true,
     projectId: projectId || undefined,
     parseOk: true,
+    sdkReady: firebaseAdmin != null,
   };
 }
 
@@ -168,7 +197,7 @@ export async function getFirebaseAdminApp() {
   }
 
   try {
-    const admin = await import("firebase-admin");
+    const admin = await loadFirebaseAdmin();
     if (admin.apps.length === 0) {
       if (raw) {
         const parsed = parseServiceAccountJson(raw);
@@ -209,8 +238,8 @@ export async function isFirebaseAdminReady(): Promise<boolean> {
 }
 
 /**
- * Sync check used by /health. Prefers a successful prior init; otherwise validates
- * that the env looks like usable credentials.
+ * Sync check used by /health. After a real init attempt, reflects SDK readiness.
+ * Before that, validates that credentials at least parse.
  */
 export function isFirebaseAdminConfigured(): boolean {
   if (firebaseAdmin) return true;

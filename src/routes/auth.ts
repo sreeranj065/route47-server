@@ -331,9 +331,11 @@ companyRoutes.use("/route47/companies/:companyId/*", async (c, next) => {
   return c.json({ message: "Missing or invalid device auth token." }, 401);
 });
 
-companyRoutes.get("/route47/companies/:companyId/health", (c) => {
+companyRoutes.get("/route47/companies/:companyId/health", async (c) => {
   const companyId = c.req.param("companyId");
   const company = getCompany(companyId);
+  const { getFirebaseAdminApp } = await import("../lib/firebase-admin-app.js");
+  await getFirebaseAdminApp();
 
   return c.json(
     buildHealthPayload({

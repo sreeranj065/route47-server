@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  getFirebaseAdminApp,
   getFirebaseInitError,
   getPushCredentialDiagnostics,
   isFirebaseAdminConfigured,
@@ -77,6 +78,7 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     chars: pushCred.chars,
     looksLikeJson: pushCred.looksLikeJson,
     parseOk: pushCred.parseOk,
+    sdkReady: pushCred.sdkReady === true,
     ...(pushCred.projectId ? { projectId: pushCred.projectId } : {}),
   };
 
