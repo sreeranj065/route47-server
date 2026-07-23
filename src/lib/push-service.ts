@@ -85,12 +85,14 @@ export async function sendPushToRecipients(input: {
           data,
           android: {
             priority: "high",
-            // Keep the wake fresh — stale silent syncs sitting in FCM queues
-            // are why drivers wait ~30s for Current List updates.
-            ttl: 120,
+            // Firebase Admin ttl is milliseconds (not seconds).
+            ttl: 120_000,
           },
         });
       } else {
+        // Chat / alerts: high priority + long TTL so Doze still delivers like WhatsApp.
+        const isChat = input.payload.type === NOTIFICATION_TYPES.MESSAGE;
+        const useHighPriority = isChat || input.payload.priority === "high";
         await admin.messaging().send({
           token,
           notification: {
@@ -99,10 +101,18 @@ export async function sendPushToRecipients(input: {
           },
           data,
           android: {
-            priority: input.payload.priority === "high" ? "high" : "normal",
-            ttl: 120,
+            priority: useHighPriority ? "high" : "normal",
+            // Firebase Admin ttl is milliseconds.
+            ttl: isChat || useHighPriority ? 86_400_000 : 120_000,
             notification: {
-              channelId: input.payload.category,
+              channelId: input.payload.category || (isChat ? "messages" : "system"),
+              ...(isChat
+                ? {
+                    priority: "high" as const,
+                    defaultSound: true,
+                    defaultVibrateTimings: true,
+                  }
+                : {}),
             },
           },
         });

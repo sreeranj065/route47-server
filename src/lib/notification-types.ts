@@ -29,6 +29,7 @@ export type NotificationCategory =
   | "proofs"
   | "drivers"
   | "announcements"
+  | "messages"
   | "system"
   | "billing";
 
@@ -46,7 +47,8 @@ export const TYPE_CATEGORY: Record<string, NotificationCategory> = {
   [NOTIFICATION_TYPES.ISSUE_REPORTED]: "drivers",
   [NOTIFICATION_TYPES.ADMIN_ANNOUNCEMENT]: "announcements",
   [NOTIFICATION_TYPES.LICENSE_NOTICE]: "billing",
-  [NOTIFICATION_TYPES.MESSAGE]: "system",
+  /** Dedicated channel so chat can use HIGH importance without muting system noise. */
+  [NOTIFICATION_TYPES.MESSAGE]: "messages",
   [NOTIFICATION_TYPES.SYNC_SILENT]: "system",
   [NOTIFICATION_TYPES.BACKUP_READY]: "system",
 };

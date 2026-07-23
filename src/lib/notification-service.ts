@@ -28,6 +28,7 @@ const DEFAULT_PREFERENCE_KEYS = [
   "proofs",
   "drivers",
   "announcements",
+  "messages",
   "system",
   "billing",
 ] as const;

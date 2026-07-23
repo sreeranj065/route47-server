@@ -84,12 +84,15 @@ function notifyMessageRecipient(input: {
       "New message from dispatch",
       preview,
       data,
+      { priority: "high" },
     );
     return;
   }
 
   const title = input.driverName ? `Message from ${input.driverName}` : "New driver message";
-  notifyAllAdmins(input.companyId, NOTIFICATION_TYPES.MESSAGE, title, preview, data);
+  notifyAllAdmins(input.companyId, NOTIFICATION_TYPES.MESSAGE, title, preview, data, {
+    priority: "high",
+  });
 }
 
 function upsertConversation(companyId: string, driverId: string, lastMessageAt: number) {
