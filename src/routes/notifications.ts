@@ -59,6 +59,55 @@ companyRoutes.delete("/route47/companies/:companyId/notifications/push-token", a
   return c.json({ message: "Push token removed." });
 });
 
+/** Diagnostics: why background chat alerts may not reach the tray. */
+companyRoutes.get("/route47/companies/:companyId/notifications/push-status", async (c) => {
+  const companyId = c.req.param("companyId");
+  const recipient = resolveRecipient(c);
+  if (!recipient) return c.json({ message: "Authentication required." }, 401);
+
+  const { isFirebaseAdminConfigured } = await import("../lib/firebase-admin-app.js");
+  const pushConfigured = isFirebaseAdminConfigured();
+  const tokenCount = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM push_tokens
+         WHERE company_id = ? AND recipient_type = ? AND recipient_id = ?`,
+      )
+      .get(companyId, recipient.recipientType, recipient.recipientId) as { c: number }
+  ).c;
+
+  const recentFailures = db
+    .prepare(
+      `SELECT id, type, push_last_error AS pushLastError, push_attempts AS pushAttempts, created_at AS createdAt
+       FROM notifications
+       WHERE company_id = ? AND recipient_type = ? AND recipient_id = ?
+         AND push_sent_at IS NULL AND push_last_error IS NOT NULL
+       ORDER BY created_at DESC
+       LIMIT 5`,
+    )
+    .all(companyId, recipient.recipientType, recipient.recipientId) as Array<{
+      id: string;
+      type: string;
+      pushLastError: string;
+      pushAttempts: number;
+      createdAt: number;
+    }>;
+
+  return c.json({
+    pushConfigured,
+    tokenCount,
+    recipientType: recipient.recipientType,
+    recipientId: recipient.recipientId,
+    backgroundPushReady: pushConfigured && tokenCount > 0,
+    recentFailures,
+    hint: !pushConfigured
+      ? "Set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON on the customer server (same Firebase project as the apps: route47-admin)."
+      : tokenCount === 0
+        ? "Open this app once while connected to the company server so it can register an FCM token."
+        : "Push looks ready — background message alerts should appear in the notification shade.",
+  });
+});
+
 companyRoutes.get("/route47/companies/:companyId/notifications", (c) => {
   const companyId = c.req.param("companyId");
   const recipient = resolveRecipient(c);

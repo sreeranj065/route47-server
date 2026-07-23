@@ -55,11 +55,17 @@ export async function sendPushToRecipients(input: {
 }): Promise<{ ok: boolean; sent: number; error?: string }> {
   const tokens = listTokens(input.companyId, input.recipientType, input.recipientId);
   if (tokens.length === 0) {
+    console.warn(
+      `[push] No tokens for ${input.recipientType}/${input.recipientId} type=${input.payload.type}`,
+    );
     return { ok: false, sent: 0, error: "No push tokens registered" };
   }
 
   const admin = await getFirebaseAdmin();
   if (!admin) {
+    console.warn(
+      "[push] FCM not configured — set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON on the customer server",
+    );
     return { ok: false, sent: 0, error: "FCM not configured on server" };
   }
 

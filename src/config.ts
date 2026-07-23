@@ -62,6 +62,13 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     disk = {};
   }
 
+  // Without this env var, FCM never leaves the server — apps only see chat
+  // alerts while they are open and polling.
+  const pushConfigured = Boolean(
+    process.env.ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON?.trim() ||
+      process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim(),
+  );
+
   return {
     ok: true,
     deploymentMode: SERVER_CONFIG.deploymentMode,
@@ -75,6 +82,7 @@ export function buildHealthPayload(extra: Record<string, unknown> = {}) {
     version: SERVER_VERSION,
     gitCommitSha: getRunningCommitSha(),
     serverTimeMillis: Date.now(),
+    pushConfigured,
     adminFeatures: [
       "drivers-roster",
       "drivers-create",

@@ -173,9 +173,13 @@ export function createNotification(input: CreateNotificationInput): string {
     isSilent ||
     isPreferenceEnabled(input.companyId, input.recipientType, input.recipientId, category)
   ) {
+    // Chat + plan wakes must not wait — background tray delivery depends on FCM
+    // leaving the server immediately while the device can still be reached.
     const wakeNow =
       isSilent ||
       input.type === NOTIFICATION_TYPES.SYNC_SILENT ||
+      input.type === NOTIFICATION_TYPES.MESSAGE ||
+      priority === "high" ||
       COLLAPSIBLE_TYPES.has(input.type);
     queuePushDelivery(id, { immediate: wakeNow });
   }
