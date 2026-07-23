@@ -29,7 +29,7 @@ import {
   type BranchRow,
 } from "../lib/admin-auth.js";
 
-/** Stable stop-id set for detecting real list edits vs status-only syncs. */
+/** Stable stop-id set for detecting membership edits (add/remove) vs status-only syncs. */
 function stopMembershipKey(stopsJsonOrArray: string | unknown[] | undefined): string {
   try {
     const stops = Array.isArray(stopsJsonOrArray)
@@ -43,6 +43,25 @@ function stopMembershipKey(stopsJsonOrArray: string | unknown[] | undefined): st
       })
       .filter(Boolean)
       .sort()
+      .join("|");
+  } catch {
+    return "";
+  }
+}
+
+/** Ordered stop-id sequence so driver reorders notify Admin without membership change. */
+function stopOrderKey(stopsJsonOrArray: string | unknown[] | undefined): string {
+  try {
+    const stops = Array.isArray(stopsJsonOrArray)
+      ? stopsJsonOrArray
+      : JSON.parse(String(stopsJsonOrArray || "[]"));
+    if (!Array.isArray(stops)) return "";
+    return stops
+      .map((raw) => {
+        const stop = raw as Record<string, unknown>;
+        return String(stop.stopId ?? stop.id ?? "").trim();
+      })
+      .filter(Boolean)
       .join("|");
   } catch {
     return "";
@@ -849,11 +868,11 @@ companyRoutes.post("/route47/companies/:companyId/driver-route-plans/sync", asyn
     deleteDuplicateRoutePlansForDriverDay(companyId, driverId, routeDateIso, routeRunId);
   }
 
-  // Only alert admins when stop membership actually changed. Routine open-app /
-  // status syncs must not spam "current list updated" notifications.
-  const previousMembership = stopMembershipKey(existing?.stopsJson);
-  const nextMembership = stopMembershipKey(JSON.stringify(stops));
-  if (!existing || previousMembership !== nextMembership) {
+  // Alert admins when stop membership or order changes. Routine open-app /
+  // status-only syncs keep the same ordered id list and must not spam.
+  const previousOrder = stopOrderKey(existing?.stopsJson);
+  const nextOrder = stopOrderKey(JSON.stringify(stops));
+  if (!existing || previousOrder !== nextOrder) {
     notifyDriverRoutePlanSynced({
       companyId,
       routeRunId,
