@@ -76,6 +76,19 @@ companyRoutes.get("/route47/companies/:companyId/notifications/push-status", asy
       .get(companyId, recipient.recipientType, recipient.recipientId) as { c: number }
   ).c;
 
+  const companyTokens =
+    recipient.recipientType === "admin"
+      ? (db
+          .prepare(
+            `SELECT recipient_id AS recipientId, COUNT(*) AS c, MAX(last_seen_at) AS lastSeenAt
+             FROM push_tokens
+             WHERE company_id = ? AND recipient_type = 'admin'
+             GROUP BY recipient_id
+             ORDER BY lastSeenAt DESC`,
+          )
+          .all(companyId) as Array<{ recipientId: string; c: number; lastSeenAt: number }>)
+      : [];
+
   const recentFailures = db
     .prepare(
       `SELECT id, type, push_last_error AS pushLastError, push_attempts AS pushAttempts, created_at AS createdAt
@@ -93,17 +106,23 @@ companyRoutes.get("/route47/companies/:companyId/notifications/push-status", asy
       createdAt: number;
     }>;
 
+  const ownerTokenCount =
+    companyTokens.find((row) => row.recipientId === "owner")?.c ?? 0;
+
   return c.json({
     pushConfigured,
     tokenCount,
     recipientType: recipient.recipientType,
     recipientId: recipient.recipientId,
+    companyAdminTokens: companyTokens,
     backgroundPushReady: pushConfigured && tokenCount > 0,
     recentFailures,
     hint: !pushConfigured
       ? "Set ROUTE47_FIREBASE_SERVICE_ACCOUNT_JSON on the customer server (same Firebase project as the apps: route47-admin)."
+      : tokenCount === 0 && recipient.recipientType === "admin" && ownerTokenCount > 0
+        ? "FCM tokens exist under recipientId owner, but this session resolves to a different admin id. Redeploy customer server ≥1.0.11 (owner always notified)."
       : tokenCount === 0
-        ? "Open this app once while connected to the company server so it can register an FCM token."
+        ? "Open this app once while connected to the company server so it can register an FCM token. Then check Railway logs for [push] No tokens…"
         : "Push looks ready — background message alerts should appear in the notification shade.",
   });
 });

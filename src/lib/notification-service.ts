@@ -230,10 +230,14 @@ export function notifyAllAdmins(
   const ids: string[] = [];
   const notifiedRecipientIds = new Set<string>();
 
-  // Prefer real admin rows. Only use legacy recipientId "owner" when no active admins exist.
-  const hasRealAdmins = admins.length > 0;
-
-  if (!hasRealAdmins && (!branchId || adminHasBranchAccess(companyId, "owner", branchId))) {
+  // Always include legacy recipientId "owner". The Admin app authenticates with the
+  // company API key as identity id "owner", so FCM tokens are stored under "owner".
+  // Skipping it whenever real admin rows exist left background chat with pushConfigured
+  // true but tokenCount 0 for the device that actually registered.
+  if (
+    options?.excludeAdminId !== "owner" &&
+    (!branchId || adminHasBranchAccess(companyId, "owner", branchId))
+  ) {
     notifiedRecipientIds.add("owner");
     ids.push(
       createNotification({
