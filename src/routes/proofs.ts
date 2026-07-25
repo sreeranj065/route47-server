@@ -74,9 +74,14 @@ companyRoutes.post("/route47/companies/:companyId/proofs/upload", async (c) => {
   }
 
   const proofId = field("proofId") || `proof-${Date.now()}`;
-  const driverId = field("driverId") || c.get("driverId");
-  const driverDeviceId = field("driverDeviceId") || c.get("driverDeviceId");
-  const vehicleId = field("vehicleId") || c.get("vehicleId");
+  // Prefer authenticated session identity so Admin Files always attribute the
+  // upload to the paired driver (form fields can be blank/stale on the phone).
+  const sessionDriverId = (c.get("driverId") ?? "").trim();
+  const sessionDeviceId = (c.get("driverDeviceId") ?? "").trim();
+  const sessionVehicleId = (c.get("vehicleId") ?? "").trim();
+  const driverId = sessionDriverId || field("driverId");
+  const driverDeviceId = sessionDeviceId || field("driverDeviceId");
+  const vehicleId = sessionVehicleId || field("vehicleId");
   const routeRunId = field("routeRunId");
   const stopId = field("stopId");
   const proofType = field("proofType");

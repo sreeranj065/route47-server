@@ -106,6 +106,10 @@ export function driverBranchFilterSql(
   if (allowedBranches === null) {
     return { clause: "", params: [] };
   }
+  // Empty IN () is invalid SQL and made Admin Files return zero proofs.
+  if (allowedBranches.length === 0) {
+    return { clause: " AND 1=0", params: [] };
+  }
 
   const defaultBranch = defaultBranchId(companyId);
   const placeholders = allowedBranches.map(() => "?").join(", ");
@@ -129,6 +133,9 @@ export function branchColumnFilterSql(
   const allowedBranches = getAdminAllowedBranchIds(companyId, admin);
   if (allowedBranches === null) {
     return { clause: "", params: [] };
+  }
+  if (allowedBranches.length === 0) {
+    return { clause: " AND 1=0", params: [] };
   }
 
   const defaultBranch = defaultBranchId(companyId);
