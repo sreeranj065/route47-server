@@ -15,6 +15,7 @@ import {
   branchColumnFilterSql,
   defaultBranchId,
   driverBranchFilterSql,
+  ensureDriverLiveTrackingColumn,
   getAdminAllowedBranchIds,
   resolveDriverBranchId,
   sharedResourceIds,
@@ -22,6 +23,7 @@ import {
 import { getDriverBranchId } from "../branch-storage.js";
 import { resolveDriverDepot } from "../lib/depot.js";
 import { effectiveThresholds, readSafetySettings } from "../lib/safety-settings-store.js";
+import { readLiveTrackingSettings } from "../lib/live-tracking-settings-store.js";
 import {
   ensureDefaultBranch,
   getAdminBranchIds,
@@ -433,6 +435,23 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
     : null;
 
   const safetySettings = readSafetySettings(companyId);
+  const liveTrackingSettings = readLiveTrackingSettings(companyId);
+
+  ensureDriverLiveTrackingColumn();
+  let liveTrackingEnabled = liveTrackingSettings.liveTrackingDefaultEnabled;
+  if (sessionDriverId) {
+    const driverRow = db
+      .prepare(
+        `SELECT live_tracking_enabled AS liveTrackingEnabled
+         FROM drivers WHERE company_id = ? AND id = ?`,
+      )
+      .get(companyId, sessionDriverId) as
+      | { liveTrackingEnabled?: number | null }
+      | undefined;
+    if (driverRow) {
+      liveTrackingEnabled = Number(driverRow.liveTrackingEnabled ?? 1) !== 0;
+    }
+  }
 
   return c.json({
     message: "Admin snapshot ready.",
@@ -446,6 +465,8 @@ companyRoutes.get("/route47/companies/:companyId/admin/snapshot", (c) => {
       depot,
       safetySettings,
       safetyEffectiveThresholds: effectiveThresholds(safetySettings),
+      liveTrackingSettings,
+      liveTrackingEnabled,
     },
   });
 });

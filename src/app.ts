@@ -11,7 +11,10 @@ import "./routes/admin-team.js";
 import "./routes/notifications.js";
 import "./routes/messages.js";
 import "./routes/branch-sharing.js";
-import { ensureDriverDeviceActivatedColumn } from "./lib/branch-filter.js";
+import {
+  ensureDriverDeviceActivatedColumn,
+  ensureDriverLiveTrackingColumn,
+} from "./lib/branch-filter.js";
 import "./lib/branch-filter.js";
 import { adminInviteRoutes } from "./routes/admin-team.js";
 import { ownerClaimRoutes } from "./routes/admin-owner-reconnect.js";
@@ -21,12 +24,14 @@ import "./routes/admin-team-reconnect.js";
 import "./routes/admin-server-update.js";
 import "./routes/admin-backups.js";
 import "./routes/admin-safety.js";
+import "./routes/admin-live-tracking.js";
 import "./routes/admin-pin-recovery.js";
 import "./routes/admin-email-settings.js";
 import { migrateFlatProofPaths } from "./proof-migration.js";
 import { migrateMessageAttachmentPaths } from "./message-attachment-migration.js";
 
 ensureDriverDeviceActivatedColumn();
+ensureDriverLiveTrackingColumn();
 
 try {
   const migratedProofs = migrateFlatProofPaths();

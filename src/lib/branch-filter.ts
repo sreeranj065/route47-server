@@ -30,6 +30,18 @@ export function ensureDriverDeviceActivatedColumn() {
   }
 }
 
+/** Per-driver continuous Live Tracking (1 = on, 0 = verification-only). */
+export function ensureDriverLiveTrackingColumn() {
+  const columns = db
+    .prepare(`PRAGMA table_info(drivers)`)
+    .all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "live_tracking_enabled")) {
+    db.exec(
+      `ALTER TABLE drivers ADD COLUMN live_tracking_enabled INTEGER NOT NULL DEFAULT 1`,
+    );
+  }
+}
+
 export function defaultBranchId(companyId: string): string {
   return ensureDefaultBranch(companyId).id;
 }
@@ -175,6 +187,7 @@ export function filterRowsByAccessibleDrivers<T extends { driverId?: unknown }>(
 }
 
 ensureDriverBranchColumn();
+ensureDriverLiveTrackingColumn();
 
 export function ensureBranchIsolationSchema() {
   const proofColumns = db

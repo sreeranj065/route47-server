@@ -5,6 +5,7 @@ import { hashPassword } from "../auth.js";
 import type { AdminIdentity } from "../lib/admin-auth.js";
 import {
   adminCanAccessDriver,
+  ensureDriverLiveTrackingColumn,
   listAccessibleDriverIds,
   resolveDriverBranchId,
 } from "../lib/branch-filter.js";
@@ -15,6 +16,7 @@ import {
   latestRoutePlan,
   stopProgress,
 } from "../lib/route-plan-sync.js";
+import { readLiveTrackingSettings } from "../lib/live-tracking-settings-store.js";
 
 type DriverRow = {
   id: string;
@@ -23,6 +25,7 @@ type DriverRow = {
   vehicleId: string;
   branchId: string;
   loginPassword?: string;
+  liveTrackingEnabled?: number | null;
 };
 
 type DriverPatchBody = {
@@ -32,7 +35,13 @@ type DriverPatchBody = {
   username?: string;
   password?: string;
   branchId?: string;
+  liveTrackingEnabled?: boolean;
 };
+
+const DRIVER_SELECT = `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
+                login_password AS loginPassword,
+                live_tracking_enabled AS liveTrackingEnabled
+         FROM drivers`;
 
 function getAdmin(c: { get: (key: "admin") => AdminIdentity | undefined }) {
   return c.get("admin") ?? null;
@@ -60,6 +69,7 @@ function mapDriverRecord(companyId: string, row: DriverRow, index: number) {
     status: driverStatus(companyId, row.id),
     vehicleId: row.vehicleId || plan?.vehicle_id || "",
     branchId: row.branchId || "",
+    liveTrackingEnabled: Number(row.liveTrackingEnabled ?? 1) !== 0,
     routeId: plan?.route_run_id || `RT-${100 + index}`,
     completedStops: completed,
     totalStops: total,
@@ -72,6 +82,8 @@ function mapDriverRecord(companyId: string, row: DriverRow, index: number) {
 
 /** Admin driver roster — registered from auth.ts so it ships with core server routes. */
 export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
+  ensureDriverLiveTrackingColumn();
+
   companyRoutes.post("/route47/companies/:companyId/drivers", async (c) => {
     if (!requireAdmin(c)) {
       return c.json({ message: "Admin API key required." }, 401);
@@ -87,6 +99,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
       username?: string;
       password?: string;
       branchId?: string;
+      liveTrackingEnabled?: boolean;
     }>();
 
     const company = db.prepare(`SELECT id FROM companies WHERE id = ?`).get(companyId);
@@ -122,10 +135,15 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     const password = body.password?.trim() || crypto.randomBytes(6).toString("hex");
     const branchId = resolveDriverBranchId(companyId, body.branchId);
     const now = Date.now();
+    const companyLive = readLiveTrackingSettings(companyId);
+    const liveTrackingEnabled =
+      body.liveTrackingEnabled === undefined
+        ? companyLive.liveTrackingDefaultEnabled
+        : Boolean(body.liveTrackingEnabled);
 
     db.prepare(
-      `INSERT INTO drivers (id, company_id, username, password_hash, login_password, display_name, vehicle_id, branch_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO drivers (id, company_id, username, password_hash, login_password, display_name, vehicle_id, branch_id, live_tracking_enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       driverId,
       companyId,
@@ -135,15 +153,12 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
       displayName,
       vehicleId,
       branchId,
+      liveTrackingEnabled ? 1 : 0,
       now,
     );
 
     const row = db
-      .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
-                login_password AS loginPassword
-         FROM drivers WHERE company_id = ? AND id = ?`,
-      )
+      .prepare(`${DRIVER_SELECT} WHERE company_id = ? AND id = ?`)
       .get(companyId, driverId) as DriverRow;
 
     return c.json({
@@ -166,9 +181,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     const accessibleIds = listAccessibleDriverIds(companyId, admin);
     const rows = db
       .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
-                login_password AS loginPassword
-         FROM drivers
+        `${DRIVER_SELECT}
          WHERE company_id = ?
          ORDER BY display_name ASC, username ASC`,
       )
@@ -197,12 +210,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     }
 
     const row = db
-      .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
-                login_password AS loginPassword
-         FROM drivers
-         WHERE company_id = ? AND id = ?`,
-      )
+      .prepare(`${DRIVER_SELECT} WHERE company_id = ? AND id = ?`)
       .get(companyId, driverId) as DriverRow | undefined;
 
     if (!row) {
@@ -229,12 +237,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     }
 
     const row = db
-      .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
-                login_password AS loginPassword
-         FROM drivers
-         WHERE company_id = ? AND id = ?`,
-      )
+      .prepare(`${DRIVER_SELECT} WHERE company_id = ? AND id = ?`)
       .get(companyId, driverId) as DriverRow | undefined;
 
     if (!row) {
@@ -246,6 +249,10 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
       body.vehicleId !== undefined ? body.vehicleId.trim() : row.vehicleId || "";
     const branchId =
       body.branchId !== undefined ? resolveDriverBranchId(companyId, body.branchId) : row.branchId;
+    const liveTrackingEnabled =
+      body.liveTrackingEnabled === undefined
+        ? Number(row.liveTrackingEnabled ?? 1) !== 0
+        : Boolean(body.liveTrackingEnabled);
 
     let username = row.username;
     if (body.username?.trim()) {
@@ -265,7 +272,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     if (newPassword) {
       db.prepare(
         `UPDATE drivers
-         SET display_name = ?, vehicle_id = ?, username = ?, password_hash = ?, login_password = ?, branch_id = ?
+         SET display_name = ?, vehicle_id = ?, username = ?, password_hash = ?, login_password = ?, branch_id = ?, live_tracking_enabled = ?
          WHERE company_id = ? AND id = ?`,
       ).run(
         displayName,
@@ -274,24 +281,28 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
         hashPassword(newPassword),
         newPassword,
         branchId,
+        liveTrackingEnabled ? 1 : 0,
         companyId,
         driverId,
       );
     } else {
       db.prepare(
         `UPDATE drivers
-         SET display_name = ?, vehicle_id = ?, username = ?, branch_id = ?
+         SET display_name = ?, vehicle_id = ?, username = ?, branch_id = ?, live_tracking_enabled = ?
          WHERE company_id = ? AND id = ?`,
-      ).run(displayName, vehicleId, username, branchId, companyId, driverId);
+      ).run(
+        displayName,
+        vehicleId,
+        username,
+        branchId,
+        liveTrackingEnabled ? 1 : 0,
+        companyId,
+        driverId,
+      );
     }
 
     const updated = db
-      .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId,
-                login_password AS loginPassword
-         FROM drivers
-         WHERE company_id = ? AND id = ?`,
-      )
+      .prepare(`${DRIVER_SELECT} WHERE company_id = ? AND id = ?`)
       .get(companyId, driverId) as DriverRow;
 
     return c.json({
@@ -316,11 +327,7 @@ export function registerDriverAdminRoutes(companyRoutes: Hono<any>) {
     }
 
     const row = db
-      .prepare(
-        `SELECT id, display_name AS displayName, username, vehicle_id AS vehicleId, branch_id AS branchId
-         FROM drivers
-         WHERE company_id = ? AND id = ?`,
-      )
+      .prepare(`${DRIVER_SELECT} WHERE company_id = ? AND id = ?`)
       .get(companyId, driverId) as DriverRow | undefined;
 
     if (!row) {
