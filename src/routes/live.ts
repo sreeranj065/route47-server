@@ -143,8 +143,11 @@ companyRoutes.post("/route47/companies/:companyId/routes/progress", async (c) =>
 });
 
 const LIVE_LOCATION_MAX_AGE_MS = 1000 * 60 * 30;
-/** Admin live map: keep last good fix long enough for brief GPS/network gaps. */
-const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 1000 * 60 * 10;
+/**
+ * Admin live map: keep last good fix across the full Live Tracking Interval range
+ * (up to 30 minutes) plus grace so pins do not disappear between samples.
+ */
+const ADMIN_LIVE_PRESENCE_MAX_AGE_MS = 1000 * 60 * 35;
 
 function latestHeartbeats(companyId: string, maxAgeMs = LIVE_LOCATION_MAX_AGE_MS) {
   const cutoff = Date.now() - maxAgeMs;
